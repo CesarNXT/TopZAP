@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import {
   Select,
   SelectContent,
@@ -25,16 +25,9 @@ import {
 } from '@/components/ui/select';
 import { contacts } from '@/lib/data';
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import { CalendarIcon, Loader2, Sparkles } from 'lucide-react';
-import { Calendar } from '../ui/calendar';
-import { cn } from '@/lib/utils';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { useState } from 'react';
+  CalendarIcon, Loader2, Sparkles, AlertTriangle, Paperclip, FileText, Video, Image as ImageIcon, Music
+} from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
 import { handleOptimizeMessage } from '@/app/actions';
 import type { OptimizeMessageContentOutput } from '@/ai/flows/optimize-message-content';
 import { toast } from '@/hooks/use-toast';
@@ -49,17 +42,19 @@ import {
   DialogClose,
 } from '../ui/dialog';
 import { Checkbox } from '../ui/checkbox';
+import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
+import { Label } from '../ui/label';
+import { PhonePreview } from './phone-preview';
 
 const formSchema = z.object({
   name: z.string().min(5, { message: 'O nome da campanha deve ter pelo menos 5 caracteres.' }),
   contactSegment: z.string().min(1, { message: 'Por favor, selecione um segmento de contato.' }),
   message: z.string().min(10, { message: 'A mensagem deve ter pelo menos 10 caracteres.' }),
-  sendDate: z.date({
-    required_error: 'A data de envio é obrigatória.',
-  }),
+  sendSpeed: z.string().default('safe'),
   liabilityAccepted: z.boolean().refine((val) => val === true, {
-    message: 'Você deve aceitar os termos de responsabilidade para enviar a campanha.',
+    message: 'Você deve aceitar os termos de responsabilidade para continuar.',
   }),
+  media: z.any().optional(),
 });
 
 export function CreateCampaignForm() {
@@ -73,17 +68,35 @@ export function CreateCampaignForm() {
       name: '',
       contactSegment: '',
       message: '',
+      sendSpeed: 'safe',
       liabilityAccepted: false,
     },
   });
 
-  const liabilityAccepted = form.watch('liabilityAccepted');
+  const { watch, setValue } = form;
+  const messageValue = watch('message');
+  const sendSpeedValue = watch('sendSpeed');
+  const mediaFile = watch('media');
+  const liabilityAccepted = watch('liabilityAccepted');
+  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const [fileName, setFileName] = useState('');
+
+  useEffect(() => {
+    if (mediaFile) {
+        setFileName(mediaFile.name);
+    } else {
+        setFileName('');
+    }
+  }, [mediaFile]);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     toast({
-      title: "Campanha Agendada!",
-      description: `A campanha "${values.name}" foi agendada para ${format(values.sendDate, "PPP", { locale: ptBR })}.`
+      title: "Campanha Enviada para a Fila!",
+      description: `A campanha "${values.name}" foi iniciada com sucesso.`
     })
+    console.log(values);
   }
 
   const onOptimize = async () => {
@@ -110,32 +123,51 @@ export function CreateCampaignForm() {
     }
   };
 
+  const handleVariableInsert = (variable: string) => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const text = textarea.value;
+        const newText = text.substring(0, start) + `[${variable}]` + text.substring(end);
+        setValue('message', newText, { shouldValidate: true });
+        textarea.focus();
+        setTimeout(() => {
+            textarea.selectionStart = textarea.selectionEnd = start + variable.length + 2;
+        }, 0)
+    }
+  };
+
   const contactSegments = ['Todos', ...Array.from(new Set(contacts.map((c) => c.segment)))];
+  const recipientCount = watch('contactSegment') === 'Todos' 
+    ? contacts.length 
+    : contacts.filter(c => c.segment === watch('contactSegment')).length;
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Detalhes da Campanha</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Nome da Campanha</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Ex: Lançamento de Inverno" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+          {/* Coluna Esquerda e Central (Formulário) */}
+          <div className="lg:col-span-2 space-y-8">
+            <Card>
+              <CardHeader>
+                <CardTitle>1. Identificação e Destinatários</CardTitle>
+                <CardDescription>Dê um nome à sua campanha e escolha quem irá recebê-la.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Nome da Campanha</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Ex: Lançamento de Inverno" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <FormField
                   control={form.control}
                   name="contactSegment"
@@ -157,119 +189,192 @@ export function CreateCampaignForm() {
                         </SelectContent>
                       </Select>
                       <FormMessage />
+                      {field.value && (
+                        <FormDescription>
+                          Esta campanha será enviada para <strong>{recipientCount}</strong> pessoas.
+                        </FormDescription>
+                      )}
                     </FormItem>
                   )}
                 />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>2. Compositor de Mensagem</CardTitle>
+                <CardDescription>Crie a mensagem perfeita e adicione mídias.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                 <FormField
+                    control={form.control}
+                    name="message"
+                    render={({ field }) => (
+                    <FormItem>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <FormLabel>Mensagem</FormLabel>
+                            <div className="flex items-center gap-2">
+                                <span className='text-xs text-muted-foreground'>Inserir variável:</span>
+                                <Button type="button" variant="outline" size="sm" className="h-7 px-2" onClick={() => handleVariableInsert('Nome')}>[Nome]</Button>
+                                <Button type="button" variant="outline" size="sm" className="h-7 px-2" onClick={() => handleVariableInsert('Telefone')}>[Telefone]</Button>
+                            </div>
+                        </div>
+                        <FormControl>
+                        <Textarea
+                            placeholder="Olá [Nome], confira nossas novidades..."
+                            className="min-h-[180px] resize-y"
+                            {...field}
+                            ref={textareaRef}
+                        />
+                        </FormControl>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <FormMessage />
+                            <Button type="button" variant="outline" size="sm" onClick={onOptimize} disabled={isOptimizing}>
+                                {isOptimizing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                                Otimizar com IA
+                            </Button>
+                        </div>
+                    </FormItem>
+                    )}
+                />
                 <FormField
                   control={form.control}
-                  name="sendDate"
+                  name="media"
                   render={({ field }) => (
-                    <FormItem className="flex flex-col">
-                      <FormLabel>Data de Envio</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <FormControl>
-                            <Button
-                              variant={'outline'}
-                              className={cn(
-                                'w-full pl-3 text-left font-normal',
-                                !field.value && 'text-muted-foreground'
-                              )}
-                            >
-                              {field.value ? (
-                                format(field.value, 'PPP', { locale: ptBR })
-                              ) : (
-                                <span>Escolha uma data</span>
-                              )}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
-                          </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={field.value}
-                            onSelect={field.onChange}
-                            disabled={(date) => {
-                                const today = new Date();
-                                today.setHours(0, 0, 0, 0);
-                                return date < today;
-                            }}
-                            initialFocus
-                            locale={ptBR}
-                          />
-                        </PopoverContent>
-                      </Popover>
+                    <FormItem>
+                      <FormLabel>Anexos de Mídia</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                            <Input 
+                                type="file" 
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                onChange={(e) => field.onChange(e.target.files ? e.target.files[0] : null)}
+                            />
+                            <div className="flex items-center justify-center w-full h-24 border-2 border-dashed rounded-md text-muted-foreground hover:border-primary hover:text-primary transition-colors">
+                                {fileName ? (
+                                    <p>{fileName}</p>
+                                ) : (
+                                    <div className='text-center space-y-1'>
+                                        <Paperclip className="mx-auto h-6 w-6" />
+                                        <p className='text-sm'>Clique para anexar Imagem, Vídeo, Áudio ou PDF</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-              </div>
+              </CardContent>
+            </Card>
 
-              <FormField
-                control={form.control}
-                name="message"
-                render={({ field }) => (
-                  <FormItem>
-                    <div className="flex items-center justify-between">
-                      <FormLabel>Mensagem</FormLabel>
-                      <Button type="button" variant="outline" size="sm" onClick={onOptimize} disabled={isOptimizing}>
-                        {isOptimizing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="mr-2 h-4 w-4" />
-                        )}
-                        Otimizar com IA
-                      </Button>
-                    </div>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Olá [Nome], confira nossas novidades..."
-                        className="min-h-[150px] resize-y"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      Use [Nome] para personalizar a mensagem com o nome do contato.
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
+            <Card>
+              <CardHeader>
+                <CardTitle>3. Configuração de Envio e Segurança</CardTitle>
+                <CardDescription>Defina a velocidade para evitar bloqueios e confirme sua responsabilidade.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <FormField
+                  control={form.control}
+                  name="sendSpeed"
+                  render={({ field }) => (
+                    <FormItem className="space-y-3">
+                      <FormLabel>Velocidade de Envio (Delay)</FormLabel>
+                      <FormControl>
+                        <RadioGroup
+                          onValueChange={field.onChange}
+                          defaultValue={field.value}
+                          className="flex flex-col space-y-1"
+                        >
+                          <FormItem className="flex items-center space-x-3 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value="safe" />
+                            </FormControl>
+                            <FormLabel className="font-normal">
+                              🐢 Modo Seguro (20-45s / msg) - Recomendado
+                            </FormLabel>
+                          </FormItem>
+                          <FormItem className="flex items-center space-x-3 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value="fast" />
+                            </FormControl>
+                            <FormLabel className="font-normal">
+                              🐇 Modo Rápido (10-20s / msg) - Risco Médio
+                            </FormLabel>
+                          </FormItem>
+                          <FormItem className="flex items-center space-x-3 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value="turbo" />
+                            </FormControl>
+                            <FormLabel className="font-normal">
+                              🚀 Modo Turbo (5-10s / msg) - Alto Risco
+                            </FormLabel>
+                          </FormItem>
+                        </RadioGroup>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {sendSpeedValue === 'turbo' && (
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Modo de Alto Risco Ativado!</AlertTitle>
+                    <AlertDescription>
+                      O Modo Turbo aumenta significativamente a chance de bloqueio do seu número. Use com extrema cautela e apenas para contatos que esperam sua mensagem.
+                    </AlertDescription>
+                  </Alert>
                 )}
-              />
+                
+                <FormField
+                    control={form.control}
+                    name="liabilityAccepted"
+                    render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 bg-background">
+                        <FormControl>
+                        <Checkbox
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                        />
+                        </FormControl>
+                        <div className="space-y-1 leading-none">
+                        <FormLabel>
+                            Termo de Responsabilidade
+                        </FormLabel>
+                        <FormDescription>
+                            Declaro que os contatos desta lista consentiram em receber mensagens. Entendo que o uso abusivo viola as políticas do WhatsApp e pode acarretar no bloqueio definitivo do meu número.
+                        </FormDescription>
+                        <FormMessage className='pt-2' />
+                        </div>
+                    </FormItem>
+                    )}
+                />
+              </CardContent>
+            </Card>
 
-              <FormField
-                control={form.control}
-                name="liabilityAccepted"
-                render={({ field }) => (
-                  <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 shadow">
-                    <FormControl>
-                      <Checkbox
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                    <div className="space-y-1 leading-none">
-                      <FormLabel>
-                        Termo de Responsabilidade
-                      </FormLabel>
-                      <FormDescription>
-                        Estou ciente de que o uso massivo para contatos frios (spam) viola os termos do WhatsApp e assumo o risco de bloqueio do número. Confirmo que estes contatos aceitaram receber minhas mensagens.
-                      </FormDescription>
-                       <FormMessage className='pt-2' />
-                    </div>
-                  </FormItem>
-                )}
-              />
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost">Salvar como Rascunho</Button>
+              <Button type="submit" disabled={!liabilityAccepted} size="lg">
+                Iniciar Disparo Agora
+              </Button>
+            </div>
+          </div>
 
-
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost">Salvar como Rascunho</Button>
-                <Button type="submit" disabled={!liabilityAccepted}>Agendar Campanha</Button>
-              </div>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
+          {/* Coluna Direita (Preview) */}
+          <div className="lg:col-span-1 sticky top-6">
+             <Card>
+                <CardHeader>
+                    <CardTitle>Preview da Mensagem</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <PhonePreview message={messageValue} media={mediaFile} />
+                </CardContent>
+             </Card>
+          </div>
+        </form>
+      </Form>
       
       <Dialog open={!!optimizationResult} onOpenChange={(open) => !open && setOptimizationResult(null)}>
         <DialogContent className="max-w-2xl">
@@ -288,7 +393,6 @@ export function CreateCampaignForm() {
                   <p className="font-mono text-sm p-4 bg-muted rounded-md">{optimizationResult.optimizedMessage}</p>
                 </AlertDescription>
               </Alert>
-
               <div>
                 <h4 className="font-semibold mb-2">Sugestões Específicas:</h4>
                 <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
@@ -297,7 +401,6 @@ export function CreateCampaignForm() {
                   ))}
                 </ul>
               </div>
-
               <div>
                 <h4 className="font-semibold mb-2">Raciocínio da IA:</h4>
                 <p className="text-sm text-muted-foreground">{optimizationResult.reasoning}</p>
