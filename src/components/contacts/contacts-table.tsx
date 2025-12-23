@@ -69,7 +69,7 @@ export const columns: ColumnDef<Contact>[] = [
     {
       accessorKey: "createdAt",
       header: "Data de Adição",
-      cell: ({ row }) => new Date(row.getValue("createdAt")).toLocaleDateString('pt-BR'),
+      cell: ({ row }) => new Date(row.getValue("createdAt")).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
     },
     {
         id: "actions",

@@ -63,7 +63,7 @@ export const columns: ColumnDef<Campaign>[] = [
     {
       accessorKey: "sentDate",
       header: "Data de Envio",
-      cell: ({ row }) => new Date(row.getValue("sentDate")).toLocaleDateString('pt-BR'),
+      cell: ({ row }) => new Date(row.getValue("sentDate")).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
     },
     {
       accessorKey: "recipients",
