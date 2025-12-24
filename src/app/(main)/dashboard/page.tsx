@@ -64,22 +64,26 @@ export default function DashboardPage() {
     const [showTour, setShowTour] = useState(false);
 
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            try {
-                const tourCompleted = localStorage.getItem(LOCAL_STORAGE_KEY);
-                if (!tourCompleted) {
-                    setShowTour(true);
-                }
-            } catch (error) {
-                console.warn("Could not access localStorage. Welcome tour will not be shown.", error);
-            }
-        }
+        // Forçando a exibição do tutorial para revisão do usuário.
+        // A lógica original está comentada abaixo.
+        setShowTour(true);
+        
+        // if (typeof window !== 'undefined') {
+        //     try {
+        //         const tourCompleted = localStorage.getItem(LOCAL_STORAGE_KEY);
+        //         if (!tourCompleted) {
+        //             setShowTour(true);
+        //         }
+        //     } catch (error) {
+        //         console.warn("Could not access localStorage. Welcome tour will not be shown.", error);
+        //     }
+        // }
     }, []);
 
     const handleTourComplete = () => {
         try {
             localStorage.setItem(LOCAL_STORAGE_KEY, 'true');
-        } catch (error) {
+        } catch (error) => {
             console.warn("Could not access localStorage to save tour state.", error);
         }
         setShowTour(false);
