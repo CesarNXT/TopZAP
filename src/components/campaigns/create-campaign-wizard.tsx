@@ -66,6 +66,7 @@ export function CreateCampaignWizard() {
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
     const [submitError, setSubmitError] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -95,28 +96,28 @@ export function CreateCampaignWizard() {
     }
 
     const processSubmit = (values: z.infer<typeof formSchema>) => {
-        toast({
-            title: "Campanha Enviada para a Fila!",
-            description: `A campanha "${values.name}" foi iniciada com sucesso.`
-        });
+        setIsSubmitting(true);
         console.log(values);
-        reset();
-        setCurrentStep(0);
+
+        setTimeout(() => {
+            toast({
+                title: "Campanha Enviada para a Fila!",
+                description: `A campanha "${values.name}" foi iniciada com sucesso.`
+            });
+            reset();
+            setCurrentStep(0);
+            setIsSubmitting(false);
+        }, 1500);
     }
 
     const handleFinalSubmit = () => {
         if (!watch('liabilityAccepted')) {
             trigger('liabilityAccepted');
             setSubmitError(true);
-            setTimeout(() => setSubmitError(false), 500); // Animation duration
-            toast({
-                variant: 'destructive',
-                title: 'Ação Necessária',
-                description: 'Por favor, aceite os termos de responsabilidade para continuar.',
-            });
-        } else {
-            handleSubmit(processSubmit)();
+            setTimeout(() => setSubmitError(false), 500);
+            return;
         }
+        handleSubmit(processSubmit)();
     };
 
 
@@ -276,13 +277,16 @@ export function CreateCampaignWizard() {
                             )}
 
                              <FormField control={form.control} name="liabilityAccepted" render={({ field }) => (
-                                <FormItem className={cn("flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 bg-background transition-colors", errors.liabilityAccepted && "border-destructive ring-2 ring-destructive/50")}>
+                                <FormItem className={cn("flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 transition-colors", submitError && !field.value ? "border-destructive ring-2 ring-destructive/50" : "")}>
                                     <FormControl>
                                         <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                                     </FormControl>
                                     <div className="space-y-1 leading-none">
                                         <FormLabel>Prometo que esta lista de contatos me conhece e aceitou receber mensagens. Entendo o risco de bloqueio se abusar.</FormLabel>
                                         <FormMessage className='pt-2' />
+                                         {submitError && !field.value && (
+                                            <p className="text-sm font-medium text-destructive pt-2">Você deve aceitar os termos para continuar.</p>
+                                        )}
                                     </div>
                                 </FormItem>
                              )} />
@@ -293,7 +297,7 @@ export function CreateCampaignWizard() {
                 
                 {/* Navigation Buttons */}
                 <div className="flex justify-between">
-                    <Button type="button" variant="ghost" onClick={prev} disabled={currentStep === 0}>
+                    <Button type="button" variant="ghost" onClick={prev} disabled={currentStep === 0 || isSubmitting}>
                         <ArrowLeft className="mr-2 h-4 w-4" /> Anterior
                     </Button>
                     {currentStep < steps.length - 1 ? (
@@ -303,9 +307,19 @@ export function CreateCampaignWizard() {
                             type="button" 
                             onClick={handleFinalSubmit} 
                             size="lg"
+                            disabled={isSubmitting}
                             className={cn(submitError && "animate-shake")}
                         >
-                            <Send className="mr-2 h-4 w-4" /> Iniciar Disparo Agora
+                            {isSubmitting ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Enviando...
+                                </>
+                            ) : (
+                                <>
+                                    <Send className="mr-2 h-4 w-4" /> Iniciar Disparo Agora
+                                </>
+                            )}
                         </Button>
                     )}
                 </div>
