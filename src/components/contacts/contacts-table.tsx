@@ -18,7 +18,6 @@ import {
   ColumnFiltersState,
   getFilteredRowModel,
   Row,
-  FilterFn,
 } from "@tanstack/react-table"
 import type { Contact } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -30,14 +29,12 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2 } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { useUser, useFirestore, useMemoFirebase } from '@/firebase';
-import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint } from 'firebase/firestore';
+import { useUser, useFirestore } from '@/firebase';
+import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint, endAt, startAt } from 'firebase/firestore';
 
 interface ContactsTableProps {
     onEditRequest: (contact: Contact) => void;
     onDelete: () => void;
-    filter: string;
-    setFilter: (filter: string) => void;
     importCounter: number;
 }
 
@@ -75,13 +72,7 @@ const formatPhoneNumber = (phone: string) => {
   return phone;
 };
 
-// Custom filter function for "starts with"
-const startsWith: FilterFn<any> = (row, columnId, value, addMeta) => {
-  const rowValue = row.getValue(columnId) as string;
-  return rowValue.toLowerCase().startsWith(value.toLowerCase());
-};
-
-export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, importCounter }: ContactsTableProps) {
+export function ContactsTable({ onEditRequest, onDelete, importCounter }: ContactsTableProps) {
     const { toast } = useToast();
     const { user } = useUser();
     const firestore = useFirestore();
@@ -92,41 +83,53 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
     const [hasMore, setHasMore] = React.useState(true);
     
     const [sorting, setSorting] = React.useState<SortingState>([])
-    const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
+    const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+    const [filter, setFilter] = React.useState('all');
+    
     const [contactToDelete, setContactToDelete] = React.useState<Contact | null>(null);
     const tableContainerRef = React.useRef<HTMLDivElement>(null);
     const [isFetchingMore, setIsFetchingMore] = React.useState(false);
-    
-    const resetAndLoad = () => {
+
+    const nameFilter = columnFilters.find(f => f.id === 'name')?.value as string || '';
+
+    const resetAndLoad = React.useCallback(() => {
         setAllContacts([]);
         setLastDoc(null);
         setHasMore(true);
         setIsLoading(true);
-    };
+    }, []);
 
     React.useEffect(() => {
         resetAndLoad();
-    }, [filter, importCounter, user]);
+    }, [filter, importCounter, nameFilter, user, resetAndLoad]);
 
-    const loadMoreContacts = React.useCallback(async () => {
-        if (!user || !hasMore || isFetchingMore) return;
+    const loadMoreContacts = React.useCallback(async (isSearch = false) => {
+        if (!user || (!isSearch && !hasMore) || isFetchingMore) return;
         
         setIsFetchingMore(true);
+        if(!isSearch) setIsLoading(true);
+
         const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
-        
         let queries: QueryConstraint[] = [];
 
         if (filter !== 'all') {
             const segmentMap = {
                 'vip': 'VIP',
                 'blocked': 'Inactive',
-            }
+            };
             queries.push(where('segment', '==', segmentMap[filter as keyof typeof segmentMap]));
         }
         
-        queries.push(orderBy('name'));
+        if (nameFilter) {
+            const endStr = nameFilter.slice(0, -1) + String.fromCharCode(nameFilter.charCodeAt(nameFilter.length - 1) + 1);
+            queries.push(where('name', '>=', nameFilter.charAt(0).toUpperCase() + nameFilter.slice(1)));
+            queries.push(where('name', '<', endStr.charAt(0).toUpperCase() + endStr.slice(1)));
+            queries.push(orderBy('name'));
+        } else {
+             queries.push(orderBy('name'));
+        }
 
-        if (lastDoc) {
+        if (lastDoc && !isSearch) {
             queries.push(startAfter(lastDoc));
         }
         
@@ -138,12 +141,17 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
             const documentSnapshots = await getDocs(q);
             const newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
 
-            setAllContacts(prev => lastDoc ? [...prev, ...newContacts] : newContacts);
+            if (isSearch) {
+                const lowerCaseSearchContacts = newContacts.filter(c => c.name.toLowerCase().startsWith(nameFilter.toLowerCase()));
+                setAllContacts(lowerCaseSearchContacts);
+            } else {
+                setAllContacts(prev => lastDoc ? [...prev, ...newContacts] : newContacts);
+            }
 
             const lastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
             setLastDoc(lastVisible);
             
-            if (documentSnapshots.docs.length < 50) {
+            if (documentSnapshots.docs.length < 50 || isSearch) {
                 setHasMore(false);
             }
         } catch (error) {
@@ -153,15 +161,16 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
             setIsLoading(false);
             setIsFetchingMore(false);
         }
-    }, [user, firestore, lastDoc, hasMore, isFetchingMore, toast, filter]);
+    }, [user, firestore, lastDoc, hasMore, isFetchingMore, toast, filter, nameFilter]);
 
     React.useEffect(() => {
-        if(isLoading) {
-            loadMoreContacts();
-        }
-    }, [isLoading, loadMoreContacts]);
+        const isSearch = !!nameFilter;
+        loadMoreContacts(isSearch);
+    }, [filter, importCounter, user, nameFilter]);
+
 
      const handleScroll = React.useCallback(() => {
+        if (nameFilter) return; // Disable infinite scroll during search
         const container = tableContainerRef.current;
         if (container) {
             const { scrollTop, scrollHeight, clientHeight } = container;
@@ -169,7 +178,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
                 loadMoreContacts();
             }
         }
-    }, [loadMoreContacts, isFetchingMore, hasMore]);
+    }, [loadMoreContacts, isFetchingMore, hasMore, nameFilter]);
     
     const handleDeleteRequest = (contact: Contact) => {
         setContactToDelete(contact);
@@ -179,7 +188,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
         if (contactToDelete && user) {
             try {
                 await deleteDoc(doc(firestore, 'users', user.uid, 'contacts', contactToDelete.id));
-                 setAllContacts(prev => prev.filter(c => c.id !== contactToDelete.id));
+                setAllContacts(prev => prev.filter(c => c.id !== contactToDelete.id));
                 toast({ title: "Contato removido", description: `${contactToDelete.name} foi removido da sua lista.` });
                 onDelete();
             } catch (error) {
@@ -195,7 +204,6 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
       {
         accessorKey: "name",
         header: "Nome",
-        filterFn: startsWith,
         cell: ({ row }) => {
           const contact = row.original;
           return (
@@ -267,6 +275,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
       sorting,
       columnFilters,
     },
+    manualFiltering: true, // Let our server/useEffect handle filtering
     meta: {
         onEdit: onEditRequest,
         onDelete: handleDeleteRequest,
@@ -278,7 +287,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
         <div className="flex items-center justify-between py-4">
             <Input
                 placeholder="Filtrar por nome..."
-                value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
+                value={nameFilter}
                 onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
                 className="max-w-sm"
             />
@@ -351,7 +360,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
                 </TableCell>
               </TableRow>
             )}
-            {isFetchingMore && (
+            {isFetchingMore && !nameFilter &&(
                 <TableRow>
                     <TableCell colSpan={columns.length} className="text-center">
                         <div className="flex justify-center items-center p-4">
@@ -360,7 +369,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
                     </TableCell>
                 </TableRow>
             )}
-             {!hasMore && allContacts.length > 0 && (
+             {!hasMore && allContacts.length > 0 && !nameFilter && (
                 <TableRow>
                     <TableCell colSpan={columns.length} className="text-center text-muted-foreground p-4">
                         Fim da lista.
