@@ -5,7 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, getAuth } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, User } from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,7 +32,7 @@ export default function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
-  const { auth } = initializeFirebase();
+  const { auth, firestore } = initializeFirebase();
 
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
@@ -56,15 +57,29 @@ export default function LoginPage() {
     setIsGoogleLoading(true);
     const provider = new GoogleAuthProvider();
     try {
-        await signInWithPopup(auth, provider);
-        router.push('/dashboard');
+      const userCredential = await signInWithPopup(auth, provider);
+      const user = userCredential.user;
+      
+      // Check if user exists in Firestore, if not, create a document
+      const userDocRef = doc(firestore, "users", user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (!userDoc.exists()) {
+        await setDoc(userDocRef, {
+          id: user.uid,
+          name: user.displayName,
+          email: user.email,
+        });
+      }
+
+      router.push('/dashboard');
     } catch (error: any) {
-        toast({
-            variant: "destructive",
-            title: "Erro ao logar com Google",
-            description: error.message || "Não foi possível autenticar com o Google."
-        })
-        setIsGoogleLoading(false);
+      toast({
+        variant: "destructive",
+        title: "Erro ao logar com Google",
+        description: error.message || "Não foi possível autenticar com o Google."
+      })
+      setIsGoogleLoading(false);
     }
   }
 

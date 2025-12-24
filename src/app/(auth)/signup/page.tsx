@@ -5,7 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { createUserWithEmailAndPassword, updateProfile, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { createUserWithEmailAndPassword, updateProfile, GoogleAuthProvider, signInWithPopup, User } from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,13 +33,22 @@ export default function SignupPage() {
     resolver: zodResolver(signupSchema),
   });
 
-  const { auth } = initializeFirebase();
+  const { auth, firestore } = initializeFirebase();
 
   const onSubmit = async (data: SignupFormValues) => {
     setIsLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
-      await updateProfile(userCredential.user, { displayName: data.name });
+      const user = userCredential.user;
+      await updateProfile(user, { displayName: data.name });
+
+      // Create user document in Firestore
+      await setDoc(doc(firestore, "users", user.uid), {
+        id: user.uid,
+        name: data.name,
+        email: user.email,
+      });
+
       toast({
         title: 'Conta Criada!',
         description: 'Seja bem-vindo! Você será redirecionado em breve.',
@@ -58,19 +68,33 @@ export default function SignupPage() {
     }
   };
   
-    const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     const provider = new GoogleAuthProvider();
     try {
-        await signInWithPopup(auth, provider);
-        router.push('/dashboard');
+      const userCredential = await signInWithPopup(auth, provider);
+      const user = userCredential.user;
+      
+      // Check if user exists in Firestore, if not, create a document
+      const userDocRef = doc(firestore, "users", user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (!userDoc.exists()) {
+        await setDoc(userDocRef, {
+          id: user.uid,
+          name: user.displayName,
+          email: user.email,
+        });
+      }
+
+      router.push('/dashboard');
     } catch (error: any) {
-        toast({
-            variant: "destructive",
-            title: "Erro ao logar com Google",
-            description: error.message || "Não foi possível autenticar com o Google."
-        })
-        setIsGoogleLoading(false);
+      toast({
+        variant: "destructive",
+        title: "Erro ao logar com Google",
+        description: error.message || "Não foi possível autenticar com o Google."
+      })
+      setIsGoogleLoading(false);
     }
   }
 
