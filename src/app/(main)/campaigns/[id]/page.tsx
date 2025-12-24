@@ -24,8 +24,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { PDFDownloadLink } from '@react-pdf/renderer';
-import { CampaignPDF } from '@/components/campaigns/campaign-pdf';
 import { campaigns, contacts } from '@/lib/data';
 import type { Campaign } from '@/lib/types';
 import { PageHeader, PageHeaderHeading, PageHeaderActions } from '@/components/page-header';
@@ -69,17 +67,10 @@ export default function CampaignReportPage({
         </div>
         <PageHeaderActions>
           {isClient && (
-            <PDFDownloadLink
-              document={<CampaignPDF data={reportData} />}
-              fileName={`relatorio-${campaign.name.toLowerCase().replace(/ /g, '-')}.pdf`}
-            >
-              {({ loading }) => (
-                <Button disabled={loading}>
-                  <Download className="mr-2 h-4 w-4" />
-                  {loading ? 'Gerando PDF...' : 'Baixar PDF'}
-                </Button>
-              )}
-            </PDFDownloadLink>
+            <Button>
+              <Download className="mr-2 h-4 w-4" />
+              Baixar PDF
+            </Button>
           )}
         </PageHeaderActions>
       </PageHeader>

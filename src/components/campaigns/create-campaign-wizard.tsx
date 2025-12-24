@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui
 import {
   Loader2, Sparkles, AlertTriangle, Users, Star, Cake, ShieldX, ArrowLeft, Send
 } from 'lucide-react';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { handleOptimizeMessage } from '@/app/actions';
 import type { OptimizeMessageContentOutput } from '@/ai/flows/optimize-message-content';
 import { toast } from '@/hooks/use-toast';
@@ -66,7 +66,7 @@ export function CreateCampaignWizard() {
     const [currentStep, setCurrentStep] = useState(0);
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
-    const [showLaunch, setShowLaunch] = useState(false);
+    const [showSuccess, setShowSuccess] = useState(false);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -96,7 +96,7 @@ export function CreateCampaignWizard() {
     }
 
     async function onSubmit(values: z.infer<typeof formSchema>) {
-        setShowLaunch(true);
+        setShowSuccess(true);
         setTimeout(() => {
             toast({
                 title: "Campanha Enviada para a Fila!",
@@ -105,7 +105,7 @@ export function CreateCampaignWizard() {
             reset();
             setCurrentStep(0);
         }, 800);
-        setTimeout(() => setShowLaunch(false), 3000);
+        setTimeout(() => setShowSuccess(false), 5000);
         console.log(values);
     }
 
@@ -145,7 +145,7 @@ export function CreateCampaignWizard() {
 
   return (
     <>
-    {showLaunch && <RocketLaunch />}
+    {showSuccess && <RocketLaunch />}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2">
             <nav aria-label="Progress" className="mb-8">

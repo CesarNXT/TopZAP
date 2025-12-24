@@ -1,14 +1,17 @@
 'use client';
 
 import React from 'react';
-import {
-  Page,
-  Text,
-  View,
-  Document,
-  StyleSheet,
-  Font,
-} from '@react-pdf/renderer';
+// Note: @react-pdf/renderer is removed, so this component will not render a PDF.
+// The types and registry are commented out to prevent build errors.
+
+// import {
+//   Page,
+//   Text,
+//   View,
+//   Document,
+//   StyleSheet,
+//   Font,
+// } from '@react-pdf/renderer';
 
 type ReportData = {
   campaignName: string;
@@ -26,17 +29,17 @@ type ReportData = {
   }[];
 };
 
-// Register fonts
-Font.register({
-    family: 'Inter',
-    fonts: [
-      { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 400 },
-      { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 500 },
-      { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 700 },
-    ],
-  });
+// // Register fonts
+// Font.register({
+//     family: 'Inter',
+//     fonts: [
+//       { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 400 },
+//       { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 500 },
+//       { src: 'https://fonts.gstatic.com/s/inter/v12/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1ZL7.woff2', fontWeight: 700 },
+//     ],
+//   });
 
-const styles = StyleSheet.create({
+const styles = {
   page: {
     fontFamily: 'Inter',
     fontSize: 10,
@@ -140,65 +143,9 @@ const styles = StyleSheet.create({
     fontSize: 8,
     color: '#aaa',
   },
-});
+};
 
-export const CampaignPDF = ({ data }: { data: ReportData }) => (
-  <Document
-    title={`Relatório - ${data.campaignName}`}
-    author="WhatsConnect"
-    subject="Relatório de Campanha"
-  >
-    <Page size="A4" style={styles.page}>
-      <View style={styles.header}>
-        <Text style={styles.logo}>WhatsConnect</Text>
-        <Text style={styles.headerTitle}>Relatório de Disparo</Text>
-      </View>
-
-      <View>
-        <Text style={{ fontSize: 12, marginBottom: 4 }}>Campanha: {data.campaignName}</Text>
-        <Text style={{ fontSize: 10, color: '#666', marginBottom: 15 }}>Data de Envio: {data.date}</Text>
-      </View>
-
-      <View style={styles.economyCard}>
-        <Text style={styles.economyText}>Economia Total nesta Campanha</Text>
-        <Text style={styles.economyValue}>R$ {data.stats.economySaved}</Text>
-      </View>
-
-      <View style={styles.statsContainer}>
-          <View style={styles.statBox}>
-              <Text style={styles.statValue}>{data.stats.total}</Text>
-              <Text style={styles.statLabel}>Total de Envios</Text>
-          </View>
-          <View style={styles.statBox}>
-              <Text style={{...styles.statValue, color: '#16a34a'}}>{data.stats.success}</Text>
-              <Text style={styles.statLabel}>Sucesso</Text>
-          </View>
-          <View style={styles.statBox}>
-              <Text style={{...styles.statValue, color: '#dc2626'}}>{data.stats.failed}</Text>
-              <Text style={styles.statLabel}>Falhas</Text>
-          </View>
-      </View>
-
-      <View style={styles.table}>
-        <View style={styles.tableRow}>
-          <Text style={styles.tableColHeader}>Nome</Text>
-          <Text style={styles.tableColHeader}>Telefone</Text>
-          <Text style={styles.tableColHeader}>Status</Text>
-        </View>
-        {data.contacts.map((contact, index) => (
-          <View style={styles.tableRow} key={index}>
-            <Text style={styles.tableCol}>{contact.name}</Text>
-            <Text style={styles.tableCol}>{contact.phone}</Text>
-            <Text style={{...styles.tableCol, ...(contact.status === 'Sucesso' ? styles.statusSuccess : styles.statusFailed)}}>
-              {contact.status}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      <Text style={styles.footer}>
-        Relatório gerado por WhatsConnect em {new Date().toLocaleDateString('pt-BR')}
-      </Text>
-    </Page>
-  </Document>
-);
+// Dummy component as @react-pdf/renderer is removed
+export const CampaignPDF = ({ data }: { data: ReportData }) => {
+    return <div>PDF generation is temporarily disabled.</div>;
+}
