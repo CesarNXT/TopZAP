@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   Send,
   Users,
-  Settings,
   ShieldCheck,
   QrCode,
 } from 'lucide-react';
@@ -49,12 +48,6 @@ const secondaryNavItems = [
         icon: ShieldCheck,
         label: 'Segurança',
         selector: '#nav-safety'
-    },
-    {
-        href: '/settings',
-        icon: Settings,
-        label: 'Configurações',
-        selector: '#nav-settings'
     },
 ]
 

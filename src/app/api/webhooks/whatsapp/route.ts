@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase-server';
 import { collection, query, where, getDocs, updateDoc, deleteField, addDoc } from 'firebase/firestore';
+import { forceDeleteInstance } from '@/app/actions/whatsapp-actions';
 
 export async function POST(request: Request) {
     try {
@@ -11,29 +12,67 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
         }
 
-        // 1. Handle Disconnection
+        // 1. Handle Connection Updates
         if (event === 'CONNECTION_UPDATE') {
             const { status, connection } = data;
+            const qrCode = data.qrCode || data.qrcode || data.base64;
             
-            // Check for disconnection signals
-            // UAZAPI/Baileys might send { status: 'disconnected' } or { connection: 'close' }
-            if (status === 'disconnected' || connection === 'close') {
-                console.log(`[Webhook] Instance ${instance} disconnected. Cleaning up...`);
-                
-                // Find the user who owns this instance
-                const usersRef = collection(db, 'users');
-                const q = query(usersRef, where('uazapi.instanceName', '==', instance));
-                const querySnapshot = await getDocs(q);
+            // Find the user who owns this instance
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('uazapi.instanceName', '==', instance));
+            const querySnapshot = await getDocs(q);
 
-                if (!querySnapshot.empty) {
-                    const userDoc = querySnapshot.docs[0];
+            if (!querySnapshot.empty) {
+                const userDoc = querySnapshot.docs[0];
+                
+                if (status === 'disconnected' || connection === 'close') {
+                    console.log(`[Webhook] Instance ${instance} disconnected. Cleaning up...`);
+                    
+                    // 1. Delete from Provider (UAZAPI)
+                    try {
+                        console.log(`[Webhook] Deleting instance ${instance} from provider...`);
+                        await forceDeleteInstance(instance);
+                        console.log(`[Webhook] Instance ${instance} deleted from provider.`);
+                    } catch (e) {
+                        console.error(`[Webhook] Failed to delete instance ${instance} from provider:`, e);
+                    }
+
+                    // 2. Remove from DB
                     await updateDoc(userDoc.ref, {
                         uazapi: deleteField()
                     });
-                    console.log(`[Webhook] Removed instance data for user ${userDoc.id}`);
-                } else {
-                    console.warn(`[Webhook] No user found for instance ${instance}`);
+                } else if (status === 'open' || status === 'connected' || connection === 'open') {
+                     console.log(`[Webhook] Instance ${instance} connected.`);
+                     await updateDoc(userDoc.ref, {
+                        'uazapi.status': 'connected',
+                        'uazapi.qrCode': deleteField() // Clear QR code on connection
+                     });
+                } else if (qrCode) {
+                    console.log(`[Webhook] QR Code received for ${instance}`);
+                    await updateDoc(userDoc.ref, {
+                        'uazapi.qrCode': qrCode,
+                        'uazapi.status': 'qrcode'
+                    });
                 }
+            } else {
+                console.warn(`[Webhook] No user found for instance ${instance}`);
+            }
+        }
+
+        // 1.1 Handle QR Code Updates (specific event)
+        if (event === 'QRCODE_UPDATED') {
+            const qrCode = data.qrcode || data.qrCode || data.base64;
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('uazapi.instanceName', '==', instance));
+            const querySnapshot = await getDocs(q);
+
+            if (!querySnapshot.empty) {
+                 const userDoc = querySnapshot.docs[0];
+                 console.log(`[Webhook] QR Code updated for ${instance}`);
+                 await updateDoc(userDoc.ref, {
+                     'uazapi.qrCode': qrCode,
+                     'uazapi.status': 'qrcode'
+                 });
             }
         }
 

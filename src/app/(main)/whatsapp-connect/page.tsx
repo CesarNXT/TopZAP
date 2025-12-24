@@ -10,11 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Loader2, QrCode, Smartphone, CheckCircle2, RefreshCw, LogOut, Link as LinkIcon, Wifi, WifiOff, ShieldCheck } from 'lucide-react';
 import Image from 'next/image';
-import { initInstance, connectInstance, getInstanceStatus, disconnectInstance } from '@/app/actions/whatsapp-actions';
+import { connectInstance, disconnectInstance, initInstance, forceDeleteInstance, setWebhook } from '@/app/actions/whatsapp-actions';
 import { useToast } from '@/hooks/use-toast';
 import { InstanceStatus } from '@/lib/uazapi-types';
 import { useUser, useFirestore } from '@/firebase/provider';
-import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, deleteField, setDoc, getDoc } from 'firebase/firestore';
 import { cn } from '@/lib/utils';
 
 // Helper to check connection status
@@ -29,58 +29,132 @@ export default function WhatsAppConnectPage() {
   
   // State
   const [instanceName, setInstanceName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState(''); // For Pair Code
   const [instanceToken, setInstanceToken] = useState('');
   const [status, setStatus] = useState<InstanceStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isPolling, setIsPolling] = useState(false);
-  const [activeTab, setActiveTab] = useState('qrcode');
   const [isInitializing, setIsInitializing] = useState(false);
   const isInitializingRef = useRef(false);
 
-  // Auto-Init Handler
-  const handleAutoInit = useCallback(async (currentUser: any) => {
-      if (isInitializingRef.current) return;
-      isInitializingRef.current = true;
-      setIsInitializing(true);
+  // Manual Instance Creation Handler
+  const handleCreateInstance = useCallback(async () => {
+      console.log("[Client] Connect button clicked");
       
-      const cleanName = (currentUser.displayName || 'user').replace(/[^a-zA-Z0-9]/g, '');
-      const generatedName = `${cleanName}_${currentUser.uid.slice(0, 4)}`;
+      if (!user) {
+          toast({ variant: "destructive", title: "Erro de Sessão", description: "Usuário não identificado. Recarregue a página." });
+          return;
+      }
+      
+      // Prevent multiple clicks
+      if (isInitializingRef.current || isInitializing) {
+          console.warn("[Client] Already initializing");
+          return;
+      }
       
       try {
-          const res = await initInstance(generatedName);
-          
-          if (res.error) {
-              console.error("Auto-init failed:", res.error);
-              toast({ variant: "destructive", title: "Erro na Inicialização", description: res.error });
-          } else {
-              const token = res.token || res.hash || res.instance?.token || res.instance?.hash;
-              
-              if (token) {
-                  // Configure Webhook
-                  const webhookUrl = `${window.location.origin}/api/webhooks/whatsapp`;
-                  await setWebhook(generatedName, token, webhookUrl);
+        isInitializingRef.current = true;
+        setIsInitializing(true);
+        toast({ title: "Iniciando", description: "Configurando ambiente seguro..." });
 
-                  await updateDoc(doc(firestore, 'users', currentUser.uid), {
-                      uazapi: {
-                          instanceName: generatedName,
-                          token: token,
-                          createdAt: new Date().toISOString(),
-                          status: 'created'
-                      }
-                  });
-                  toast({ title: "Instância Pronta", description: "Conecte seu WhatsApp agora." });
-              }
-          }
-      } catch (e) {
-          console.error("Auto-init exception", e);
+        const generatedName = user.uid;
+        const webhookUrl = `${window.location.origin}/api/webhooks/whatsapp`;
+        
+        // --- STRICT FLOW ORCHESTRATION ---
+        
+        // 1. Force Cleanup (Ensure clean slate)
+        console.log("[Client] Step 1: Cleanup");
+        await forceDeleteInstance(generatedName);
+        
+        // 2. Init Instance (Create)
+        console.log("[Client] Step 2: Init Instance");
+        let initRes = await initInstance(generatedName);
+        if (initRes.error) {
+            // Retry logic
+            if (initRes.error.includes('already exists') || initRes.error.includes('409')) {
+                await new Promise(r => setTimeout(r, 2000));
+                initRes = await initInstance(generatedName);
+            }
+        }
+        
+        if (initRes.error) {
+             throw new Error(initRes.error);
+        }
+        
+        const token = initRes.token || initRes.hash || initRes.instance?.token || initRes.instance?.hash;
+        if (!token) throw new Error("Falha ao obter token da instância");
+
+        // 3. Save Token (Client Side - Authenticated)
+        // MUST happen before Webhook so webhook handler can find the user
+        console.log("[Client] Step 3: Save Token");
+        await setDoc(doc(firestore, 'users', user.uid), {
+            uazapi: {
+                instanceName: generatedName,
+                token: token,
+                createdAt: new Date().toISOString(),
+                status: 'created'
+            }
+        }, { merge: true });
+        
+        // Update local state immediately
+        setInstanceName(generatedName);
+        setInstanceToken(token);
+
+        // 4. Configure Webhook
+        console.log("[Client] Step 4: Set Webhook");
+        const webhookRes = await setWebhook(generatedName, token, webhookUrl);
+        if (webhookRes.error) {
+            console.warn("Webhook warning:", webhookRes.error);
+        }
+
+        // 5. Connect (Generate QR)
+        console.log("[Client] Step 5: Generate QR");
+        const connectRes = await connectInstance(generatedName, token);
+        if (connectRes.error) {
+             throw new Error(connectRes.error);
+        }
+
+        const qrCode = connectRes.qrcode || connectRes.base64 || connectRes.instance?.qrcode || connectRes.instance?.base64;
+        
+        if (qrCode) {
+            setStatus((prev) => ({
+                ...prev,
+                qrCode: qrCode,
+                status: 'disconnected' // Will be updated by webhook
+            } as InstanceStatus));
+        }
+
+        toast({ title: "Instância Criada", description: "Conecte seu WhatsApp agora." });
+        
+        // 6. Timeout Cleanup Monitor (Client Side)
+        setTimeout(async () => {
+             console.log("[Client] Checking connection timeout...");
+             try {
+                 const userDocSnap = await getDoc(doc(firestore, 'users', user.uid));
+                 if (userDocSnap.exists()) {
+                     const d = userDocSnap.data();
+                     const currentStatus = d.uazapi?.status;
+                     if (currentStatus !== 'connected' && currentStatus !== 'open') {
+                         console.log("[Client] Timeout reached. Cleaning up...");
+                         toast({ variant: "destructive", title: "Tempo Esgotado", description: "Conexão não detectada. Tentando limpar..." });
+                         await handleDisconnect(); // Re-use disconnect logic
+                     }
+                 }
+             } catch (e) {
+                 console.error("Timeout check failed", e);
+             }
+        }, 60000);
+
+      } catch (e: any) {
+          console.error("Setup exception", e);
+          toast({ variant: "destructive", title: "Erro na Inicialização", description: e.message || "Ocorreu um erro ao criar a instância." });
+          // Cleanup if possible
+          await handleDisconnect();
       } finally {
           isInitializingRef.current = false;
           setIsInitializing(false);
       }
-  }, [firestore, toast]);
+  }, [user, firestore, toast]);
 
-  // Sync with Firestore & Auto-Init
+  // Sync with Firestore
   useEffect(() => {
       if (!user || !firestore) return;
 
@@ -91,68 +165,25 @@ export default function WhatsAppConnectPage() {
               if (data.uazapi && data.uazapi.instanceName && data.uazapi.token) {
                   setInstanceName(data.uazapi.instanceName);
                   setInstanceToken(data.uazapi.token);
-                  setIsPolling(true);
-              } else {
-                  if (!isInitializingRef.current && !data.uazapi) {
-                      handleAutoInit(user);
+                  
+                  // Update status from Firestore (Webhook updates)
+                  if (data.uazapi.status || data.uazapi.qrCode) {
+                      setStatus(prev => ({
+                          ...prev,
+                          status: data.uazapi.status || prev?.status || 'disconnected',
+                          qrCode: data.uazapi.qrCode || (data.uazapi.status === 'connected' ? undefined : prev?.qrCode),
+                          profilePictureUrl: prev?.profilePictureUrl, // Preserve if available
+                          profileName: prev?.profileName
+                      } as InstanceStatus));
                   }
               }
           }
       });
 
       return () => unsubscribe();
-  }, [user, firestore, handleAutoInit]);
+  }, [user, firestore]);
 
   const isConnected = checkIsConnected(status?.status);
-
-  // Poll status
-  const pollStatus = useCallback(async () => {
-    if (!instanceName || !instanceToken) return;
-
-    try {
-        const result = await getInstanceStatus(instanceName, instanceToken);
-        if ('error' in result) {
-            // Handle error silently or log
-        } else {
-            let statusValue = result.status || result.instance?.status;
-
-            if (typeof statusValue === 'object' && statusValue !== null) {
-                if ('connected' in statusValue) {
-                    statusValue = statusValue.connected ? 'connected' : 'disconnected';
-                } else {
-                    statusValue = 'unknown'; 
-                }
-            }
-
-            const normalizedStatus = {
-                ...result,
-                qrCode: result.qrCode || (result.instance as any)?.qrcode || (result.instance as any)?.qrCode,
-                pairCode: result.pairCode || (result.instance as any)?.paircode || (result.instance as any)?.pairCode,
-                status: statusValue
-            };
-            
-            setStatus(normalizedStatus);
-            
-            if (checkIsConnected(normalizedStatus.status) && user) {
-                 await updateDoc(doc(firestore, 'users', user.uid), {
-                      'uazapi.status': normalizedStatus.status,
-                      'uazapi.token': instanceToken
-                 }).catch(e => console.error("Error updating status in DB", e));
-            }
-        }
-    } catch (e) {
-        console.error("Polling error", e);
-    }
-  }, [instanceName, instanceToken, user, firestore]);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isPolling && instanceName && instanceToken) {
-        pollStatus();
-        interval = setInterval(pollStatus, 3000);
-    }
-    return () => clearInterval(interval);
-  }, [isPolling, pollStatus, instanceName, instanceToken]);
 
   // Handlers
   const handleGenerateQR = async () => {
@@ -163,36 +194,37 @@ export default function WhatsAppConnectPage() {
      try {
          const res = await connectInstance(instanceName, instanceToken);
          if (res.error) {
-             toast({ variant: "destructive", title: "Erro", description: res.error });
+             console.error("GenerateQR error:", res.error);
+             // Handle Invalid Token / Instance Not Found
+             if (typeof res.error === 'string' && (res.error.includes('401') || res.error.includes('403') || res.error.includes('not found'))) {
+                  toast({ variant: "destructive", title: "Sessão Inválida", description: "Reiniciando conexão..." });
+                  // Clear state to force re-creation
+                  setInstanceToken('');
+                  setInstanceName('');
+                  setStatus(null);
+                  if (user) {
+                      await updateDoc(doc(firestore, 'users', user.uid), {
+                          uazapi: deleteField()
+                      }).catch(() => {});
+                  }
+             } else {
+                 toast({ variant: "destructive", title: "Erro", description: res.error });
+             }
          } else {
-             setIsPolling(true);
+             // Update QR Code immediately
+             const newQr = res.qrcode || res.base64 || res.instance?.qrcode || res.instance?.base64;
+             if (newQr) {
+                 setStatus(prev => ({
+                     ...prev,
+                     qrCode: newQr,
+                     status: 'qrcode'
+                 } as InstanceStatus));
+             }
              toast({ title: "Gerado", description: "Aguarde o QR Code..." });
          }
      } finally {
          setIsLoading(false);
      }
-  };
-
-  const handleGeneratePairCode = async () => {
-      if (!phoneNumber) {
-          toast({ variant: "destructive", title: "Obrigatório", description: "Informe o número do celular." });
-          return;
-      }
-      if (!instanceToken) return;
-      if (isConnected) return;
-
-      setIsLoading(true);
-      try {
-          const res = await connectInstance(instanceName, instanceToken, phoneNumber);
-           if (res.error) {
-             toast({ variant: "destructive", title: "Erro", description: res.error });
-         } else {
-             setIsPolling(true);
-             toast({ title: "Solicitado", description: "Código de pareamento gerado." });
-         }
-      } finally {
-          setIsLoading(false);
-      }
   };
 
   const handleDisconnect = async () => {
@@ -208,7 +240,6 @@ export default function WhatsAppConnectPage() {
           setInstanceToken('');
           setInstanceName('');
           setStatus(null);
-          setIsPolling(false);
           toast({ title: "Desconectado", description: "Instância removida." });
       } catch (e) {
           console.error(e);
@@ -346,98 +377,43 @@ export default function WhatsAppConnectPage() {
                     <div className="h-2 w-full bg-gradient-to-r from-primary/50 to-emerald-400" />
                     <CardHeader>
                         <CardTitle>Vincular Novo Dispositivo</CardTitle>
-                        <CardDescription>Escolha o método de conexão preferido.</CardDescription>
+                        <CardDescription>Escaneie o QR Code para conectar.</CardDescription>
                     </CardHeader>
                     <CardContent className="p-0">
-                        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                            <div className="px-6">
-                                <TabsList className="grid w-full grid-cols-2 p-1 bg-muted/50 rounded-xl">
-                                    <TabsTrigger value="qrcode" className="rounded-lg data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-sm">
-                                        <QrCode className="mr-2 h-4 w-4" /> QR Code
-                                    </TabsTrigger>
-                                    <TabsTrigger value="paircode" className="rounded-lg data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-sm">
-                                        <Smartphone className="mr-2 h-4 w-4" /> Código via SMS
-                                    </TabsTrigger>
-                                </TabsList>
-                            </div>
-                            
-                            <div className="p-6 min-h-[400px] flex flex-col justify-center">
-                                <TabsContent value="qrcode" className="mt-0 space-y-6 focus-visible:ring-0">
-                                    <div className="flex flex-col items-center justify-center">
-                                        <div className="relative flex h-72 w-72 items-center justify-center rounded-3xl bg-white p-4 shadow-inner ring-1 ring-black/5">
-                                            {status?.qrCode ? (
-                                                <div className="relative h-full w-full overflow-hidden rounded-xl">
-                                                    <Image 
-                                                        src={status.qrCode.startsWith('data:image') ? status.qrCode : `data:image/png;base64,${status.qrCode}`}
-                                                        alt="QR Code" 
-                                                        fill
-                                                        className="object-contain"
-                                                    />
-                                                    {/* Scanning Line Animation */}
-                                                    <div className="absolute inset-x-0 top-0 h-1 bg-primary/50 shadow-[0_0_20px_rgba(37,211,102,0.6)] animate-scan" />
-                                                </div>
-                                            ) : (
-                                                <div className="flex flex-col items-center justify-center text-muted-foreground/50">
-                                                    <QrCode className="h-20 w-20 opacity-20" />
-                                                    <p className="mt-4 text-sm font-medium">Aguardando geração...</p>
-                                                </div>
-                                            )}
+                        <div className="p-6 min-h-[400px] flex flex-col justify-center">
+                            <div className="flex flex-col items-center justify-center">
+                                <div className="relative flex h-72 w-72 items-center justify-center rounded-3xl bg-white p-4 shadow-inner ring-1 ring-black/5">
+                                    {status?.qrCode ? (
+                                        <div className="relative h-full w-full overflow-hidden rounded-xl">
+                                            <Image 
+                                                src={status.qrCode.startsWith('data:image') ? status.qrCode : `data:image/png;base64,${status.qrCode}`}
+                                                alt="QR Code" 
+                                                fill
+                                                className="object-contain"
+                                            />
+                                            {/* Scanning Line Animation */}
+                                            <div className="absolute inset-x-0 top-0 h-1 bg-primary/50 shadow-[0_0_20px_rgba(37,211,102,0.6)] animate-scan" />
                                         </div>
-                                    </div>
-                                    <Button 
-                                        onClick={handleGenerateQR} 
-                                        disabled={isLoading} 
-                                        className="w-full h-12 text-base font-medium transition-transform active:scale-[0.98]"
-                                        size="lg"
-                                    >
-                                        {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <RefreshCw className="mr-2 h-5 w-5" />}
-                                        {status?.qrCode ? 'Atualizar QR Code' : 'Gerar QR Code'}
-                                    </Button>
-                                </TabsContent>
-                                
-                                <TabsContent value="paircode" className="mt-0 space-y-6 focus-visible:ring-0">
-                                    <div className="space-y-4 pt-4">
-                                        <div className="space-y-2">
-                                            <Label htmlFor="phone" className="text-base">Número do WhatsApp</Label>
-                                            <div className="relative">
-                                                <Input 
-                                                    id="phone" 
-                                                    placeholder="Ex: 5511999998888" 
-                                                    value={phoneNumber}
-                                                    onChange={(e) => setPhoneNumber(e.target.value)}
-                                                    className="h-12 pl-12 text-lg"
-                                                />
-                                                <Smartphone className="absolute left-4 top-3.5 h-5 w-5 text-muted-foreground" />
-                                            </div>
-                                            <p className="text-sm text-muted-foreground">Digite o número completo com código do país (DDI) e DDD.</p>
+                                    ) : (
+                                        <div className="flex flex-col items-center justify-center text-muted-foreground/50">
+                                            <QrCode className="h-20 w-20 opacity-20" />
+                                            <p className="mt-4 text-sm font-medium">Aguardando geração...</p>
                                         </div>
-                                        
-                                        {status?.pairCode && (
-                                            <div className="group relative overflow-hidden rounded-xl bg-slate-900 p-8 text-center transition-all hover:bg-slate-800">
-                                                <p className="text-sm font-medium text-slate-400 mb-3 uppercase tracking-wider">Código de Pareamento</p>
-                                                <div className="flex justify-center gap-2">
-                                                    {status.pairCode.split('').map((char, i) => (
-                                                        <span key={i} className="flex h-12 w-10 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-white shadow-sm ring-1 ring-white/10">
-                                                            {char}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        
-                                        <Button 
-                                            onClick={handleGeneratePairCode} 
-                                            disabled={isLoading || !phoneNumber} 
-                                            className="w-full h-12 text-base font-medium"
-                                            size="lg"
-                                        >
-                                            {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Smartphone className="mr-2 h-5 w-5" />}
-                                            Gerar Código
-                                        </Button>
-                                    </div>
-                                </TabsContent>
+                                    )}
+                                </div>
                             </div>
-                        </Tabs>
+                            <div className="mt-8 max-w-sm mx-auto w-full">
+                                <Button 
+                                    onClick={handleGenerateQR} 
+                                    disabled={isLoading} 
+                                    className="w-full h-12 text-base font-medium transition-transform active:scale-[0.98]"
+                                    size="lg"
+                                >
+                                    {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <RefreshCw className="mr-2 h-5 w-5" />}
+                                    {status?.qrCode ? 'Atualizar QR Code' : 'Gerar QR Code'}
+                                </Button>
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
             ) : isConnected ? (
@@ -458,9 +434,29 @@ export default function WhatsAppConnectPage() {
                     </div>
                 </Card>
             ) : (
-                <div className="flex h-full items-center justify-center rounded-xl border border-dashed p-8 text-center text-muted-foreground">
-                    <p>Inicializando serviço de conexão...</p>
-                </div>
+                <Card className="h-full border-none shadow-lg flex flex-col items-center justify-center p-8 text-center space-y-6 bg-muted/10">
+                    <div className="bg-primary/10 p-6 rounded-full">
+                         <Smartphone className="h-12 w-12 text-primary" />
+                    </div>
+                    <div className="space-y-2">
+                        <h3 className="text-xl font-bold">Conectar WhatsApp</h3>
+                        <p className="text-muted-foreground max-w-sm">
+                            Nenhuma instância ativa encontrada. Clique abaixo para criar uma nova conexão e sincronizar suas mensagens.
+                        </p>
+                    </div>
+                    <Button 
+                        onClick={(e) => {
+                            e.preventDefault();
+                            handleCreateInstance();
+                        }} 
+                        disabled={isInitializing} 
+                        size="lg" 
+                        className="px-8 z-50 relative cursor-pointer"
+                    >
+                        {isInitializing ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <RefreshCw className="mr-2 h-5 w-5" />}
+                        {isInitializing ? 'Processando...' : 'Conectar WhatsApp'}
+                    </Button>
+                 </Card>
             )}
         </div>
       </div>

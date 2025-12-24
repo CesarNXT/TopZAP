@@ -2,36 +2,41 @@
 
 import { InstanceStatus } from '@/lib/uazapi-types';
 
+import { db } from '@/lib/firebase-server';
+import { doc, setDoc, updateDoc, deleteField, getDoc } from 'firebase/firestore';
+
 const UAZAPI_URL = process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
 const UAZAPI_ADMIN_TOKEN = process.env.UAZAPI_ADMIN_TOKEN;
 
 export async function initInstance(instanceName: string) {
-  // console.log(`[UAZAPI] Init instance: ${instanceName} at ${UAZAPI_URL}`);
-  
   if (!UAZAPI_ADMIN_TOKEN || UAZAPI_ADMIN_TOKEN === 'admin_token_here') {
       console.error('[UAZAPI] Admin token is missing or default.');
       return { error: 'Configuration Error: Admin Token is missing.' };
   }
 
-  // Try both headers just in case, or stick to AdminToken if verified.
-  // UazAPI usually expects 'apikey' for global/admin actions in some versions, 'AdminToken' in others.
-  // Based on "Ter um admintoken válido", we use AdminToken.
   const headers = {
     'Content-Type': 'application/json',
     'AdminToken': UAZAPI_ADMIN_TOKEN,
-    'apikey': UAZAPI_ADMIN_TOKEN // Adding apikey as fallback/duplicate just to be safe
+    'apikey': UAZAPI_ADMIN_TOKEN
   };
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     const response = await fetch(`${UAZAPI_URL}/instance/init`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ name: instanceName }),
+      body: JSON.stringify({ 
+        name: instanceName,
+        fingerprintProfile: "chrome",
+        browser: "chrome"
+      }),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     const responseText = await response.text();
-    // console.log(`[UAZAPI] Init response status: ${response.status}`);
-    // console.log(`[UAZAPI] Init response body: ${responseText}`);
 
     if (!response.ok) {
         return { error: `Failed to init instance: ${response.status} ${responseText}` };
@@ -49,28 +54,25 @@ export async function initInstance(instanceName: string) {
   }
 }
 
-export async function connectInstance(instanceName: string, token: string, phoneNumber?: string) {
-  // console.log(`[UAZAPI] Connect instance: ${instanceName}, Phone: ${phoneNumber || 'QR Code'}`);
+export async function connectInstance(instanceName: string, token: string) {
   try {
-    const body: any = {};
-    if (phoneNumber) {
-      body.phone = phoneNumber.replace(/\D/g, ''); // Remove non-digits
-    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    // Docs: POST /instance/connect
     const response = await fetch(`${UAZAPI_URL}/instance/connect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Token': token, // Use instance token
-        'Authorization': `Bearer ${token}` // Some versions might use Bearer
+        'Accept': 'application/json',
+        'Token': token,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({}),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     const responseText = await response.text();
-    // console.log(`[UAZAPI] Connect response status: ${response.status}`);
-    // console.log(`[UAZAPI] Connect response body: ${responseText}`);
+    console.log(`[UAZAPI] Connect response for ${instanceName}: ${response.status} ${responseText}`);
 
     if (!response.ok) {
          throw new Error(`Failed to connect instance: ${response.status} ${responseText}`);
@@ -83,38 +85,8 @@ export async function connectInstance(instanceName: string, token: string, phone
   }
 }
 
-export async function getInstanceStatus(instanceName: string, token: string): Promise<InstanceStatus | { error: string }> {
-  // console.log(`[UAZAPI] Get status: ${instanceName}`); // Commented out to reduce noise in polling
-  try {
-    // Docs: GET /instance/status
-    const response = await fetch(`${UAZAPI_URL}/instance/status`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Token': token,
-        'Authorization': `Bearer ${token}`
-      },
-    });
-
-    if (!response.ok) {
-        if (response.status === 404) {
-            return { error: 'Instance not found' };
-        }
-        const text = await response.text();
-        throw new Error(`Failed to get status: ${response.status} ${text}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error getting instance status:', error);
-    return { error: 'Failed to get status' };
-  }
-}
-
 export async function disconnectInstance(instanceName: string, token: string) {
     try {
-        // First disconnect
         const disconnectResponse = await fetch(`${UAZAPI_URL}/instance/disconnect`, {
             method: 'POST',
             headers: {
@@ -123,24 +95,15 @@ export async function disconnectInstance(instanceName: string, token: string) {
             },
         });
 
-        // Even if disconnect fails (e.g. already disconnected), we try to delete
         if (!disconnectResponse.ok) {
              console.warn(`Disconnect failed or already disconnected: ${disconnectResponse.status}`);
         }
-        
-        // Then delete
-        // Docs: DELETE /instance/delete/{instanceName} usually, but let's check standard UAZAPI
-        // If UAZAPI follows evolution, it might be DELETE /instance/delete with body or param.
-        // Assuming DELETE /instance/delete/{instanceName} or similar.
-        // Based on other endpoints, it might be POST /instance/delete or DELETE /instance/{instanceName}
-        // Common UAZAPI: DELETE /instance/delete/:instance
         
         const deleteResponse = await fetch(`${UAZAPI_URL}/instance/delete/${instanceName}`, {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json',
                 'AdminToken': UAZAPI_ADMIN_TOKEN!, 
-                // Some versions need AdminToken to delete, others might accept instance token if allowed
             },
         });
 
@@ -158,12 +121,13 @@ export async function disconnectInstance(instanceName: string, token: string) {
 
 export async function setWebhook(instanceName: string, token: string, webhookUrl: string) {
     try {
-        const response = await fetch(`${UAZAPI_URL}/webhook/set/${instanceName}`, {
+        console.log(`[UAZAPI] Setting webhook for ${instanceName} to ${webhookUrl}`);
+        // Endpoint adjusted to match likely API pattern /instance/webhook
+        const response = await fetch(`${UAZAPI_URL}/instance/webhook`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Token': token,
-                'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({
                 webhookUrl: webhookUrl,
@@ -205,4 +169,37 @@ export async function setWebhook(instanceName: string, token: string, webhookUrl
         console.error('Error setting webhook:', error);
         return { error: error.message || 'Failed to set webhook' };
     }
+}
+
+export async function forceDeleteInstance(instanceName: string) {
+    if (!UAZAPI_ADMIN_TOKEN) return { error: 'Admin Token missing' };
+    
+    try {
+        const deleteResponse = await fetch(`${UAZAPI_URL}/instance/delete/${instanceName}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'AdminToken': UAZAPI_ADMIN_TOKEN,
+            },
+        });
+
+        if (!deleteResponse.ok) {
+            if (deleteResponse.status === 404) {
+                return { success: true, message: 'Instance not found (already deleted)' };
+            }
+            const errorText = await deleteResponse.text();
+            return { error: `Failed to force delete: ${deleteResponse.status} ${errorText}` };
+        }
+
+        return await deleteResponse.json();
+    } catch (error: any) {
+        console.error('Error force deleting:', error);
+        return { error: error.message || 'Failed to force delete' };
+    }
+}
+
+// Server-side setup function removed to allow client-side orchestration (for proper Firestore Auth/Permission handling)
+// The client will handle the strict flow: ForceDelete -> Init -> Save(Client) -> Webhook -> Connect
+export async function setupWhatsAppInstance(userId: string, instanceName: string, webhookUrl: string) {
+    return { error: 'Deprecated. Use client-side orchestration.' };
 }
