@@ -6,6 +6,7 @@ import {
   MessageSquareText,
   TrendingUp,
   Loader2,
+  BadgeDollarSign,
 } from 'lucide-react';
 import React from 'react';
 import {
@@ -30,6 +31,9 @@ import { PageHeader, PageHeaderHeading, PageHeaderActions } from '@/components/p
 import { useDoc, useUser, useFirestore, useCollection } from '@/firebase';
 import { doc, collection } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
+import { PDFDownloadLink } from '@react-pdf/renderer';
+import { CampaignPDF } from '@/components/campaigns/campaign-pdf';
+
 
 export default function CampaignReportPage({
   params,
@@ -38,6 +42,11 @@ export default function CampaignReportPage({
 }) {
   const { user } = useUser();
   const firestore = useFirestore();
+  const [isClient, setIsClient] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   const campaignRef = useMemoFirebase(() => {
     if (!user) return null;
@@ -67,7 +76,7 @@ export default function CampaignReportPage({
   
   if (!campaign) {
     return (
-        <div className="container px-4 py-6 md:px-6 lg:py-8">
+        <div className="container px-4 py-6 md:px-62 lg:py-8">
             <PageHeader>
                 <PageHeaderHeading>Campanha não encontrada</PageHeaderHeading>
                 <p className="text-muted-foreground mt-2">
@@ -77,16 +86,19 @@ export default function CampaignReportPage({
         </div>
     )
   }
+  
+  const totalSuccess = Math.floor(campaign.recipients * (campaign.engagement / 100));
 
   const reportData = {
     campaignName: campaign.name,
     date: new Date(campaign.sentDate).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
     stats: {
       total: campaign.recipients,
-      success: Math.floor(campaign.recipients * (campaign.engagement / 100)),
-      failed: campaign.recipients - Math.floor(campaign.recipients * (campaign.engagement / 100)),
+      success: totalSuccess,
+      failed: campaign.recipients - totalSuccess,
+      economySaved: `R$ ${(campaign.recipients * 0.35).toFixed(2).replace('.', ',')}`,
     },
-    contacts: (contacts || []).slice(0, 10).map(c => ({
+    contacts: (contacts || []).slice(0, 100).map(c => ({ // limit to 100 for pdf
       name: c.name,
       phone: c.phone,
       status: Math.random() > 0.2 ? 'Sucesso' : 'Falha', // This part remains mock 
@@ -103,14 +115,32 @@ export default function CampaignReportPage({
           </p>
         </div>
         <PageHeaderActions>
-            <Button>
-              <Download className="mr-2 h-4 w-4" />
-              Baixar PDF
-            </Button>
+            {isClient ? (
+                <PDFDownloadLink
+                document={<CampaignPDF data={reportData} />}
+                fileName={`Relatorio_${reportData.campaignName.replace(/\s+/g, '_')}.pdf`}
+                >
+                {({ loading }) => (
+                    <Button disabled={loading}>
+                    {loading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                        <Download className="mr-2 h-4 w-4" />
+                    )}
+                    Baixar PDF
+                    </Button>
+                )}
+                </PDFDownloadLink>
+            ) : (
+                <Button disabled>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Baixar PDF
+                </Button>
+            )}
         </PageHeaderActions>
       </PageHeader>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total de Envios</CardTitle>
@@ -147,13 +177,23 @@ export default function CampaignReportPage({
             <div className="text-2xl font-bold">{campaign.engagement}%</div>
           </CardContent>
         </Card>
+        <Card className="bg-green-50 dark:bg-green-900/20 border-green-500/50">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-green-700 dark:text-green-300">Economia vs API</CardTitle>
+                <BadgeDollarSign className="h-4 w-4 text-green-600" />
+            </CardHeader>
+            <CardContent>
+                <div className="text-2xl font-bold text-green-800 dark:text-green-200">{reportData.stats.economySaved}</div>
+                <p className="text-xs text-green-600 dark:text-green-400">Estimativa vs. API Oficial</p>
+            </CardContent>
+        </Card>
       </div>
 
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>Detalhes por Contato</CardTitle>
           <CardDescription>
-            Status de entrega para cada contato na campanha.
+            Status de entrega para cada contato na campanha (amostra).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -166,7 +206,7 @@ export default function CampaignReportPage({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {reportData.contacts.map((contact, index) => (
+              {reportData.contacts.slice(0, 10).map((contact, index) => ( // show only 10 on page
                 <TableRow key={index}>
                   <TableCell className="font-medium">{contact.name}</TableCell>
                   <TableCell>{contact.phone}</TableCell>
@@ -177,8 +217,8 @@ export default function CampaignReportPage({
                       }
                       className={
                         contact.status === 'Sucesso'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300'
                       }
                     >
                       {contact.status}
