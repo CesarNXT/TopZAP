@@ -21,12 +21,12 @@ import {
   MessageSquareText,
   PlusCircle,
   TrendingUp,
-  Upload,
   TriangleAlert,
   XCircle,
   Power,
+  ServerCrash,
   BatteryWarning,
-  ServerCrash
+  MessageSquareQuote
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -66,9 +66,31 @@ const lastSentMessages = [
     { id: 5, to: "Eduarda Lima", status: "Waiting", campaign: "Lançamento Outono" },
 ]
 
-// --- Connection Status Component ---
+const totalSentThisMonth = 3250;
+const costPerMessage = 0.30;
+const savingsThisMonth = (totalSentThisMonth * costPerMessage).toFixed(2).replace('.', ',');
+
+
+const Greeting = () => {
+    const [greeting, setGreeting] = React.useState('');
+
+    React.useEffect(() => {
+        const hour = new Date().getHours();
+        if (hour < 12) {
+            setGreeting('Bom dia! ☀️ Vamos vender hoje?');
+        } else if (hour < 18) {
+            setGreeting('Boa tarde! ☕ Vamos vender hoje?');
+        } else {
+            setGreeting('Boa noite! 🌙');
+        }
+    }, []);
+
+    return <PageHeaderHeading>{greeting}</PageHeaderHeading>;
+}
+
+
 const ConnectionStatus = () => {
-    const status = 'connected'; // 'connected', 'disconnected', 'waiting'
+    const status = 'connected'; 
 
     const statusConfig = {
         connected: {
@@ -111,23 +133,30 @@ const ConnectionStatus = () => {
 };
 
 
-// --- Main Dashboard Page Component ---
 export default function DashboardPage() {
   return (
     <div className="container relative">
       <PageHeader className='pb-4'>
-        <div className="flex items-center justify-between">
-            <div>
-                <PageHeaderHeading>Olá, Eduardo</PageHeaderHeading>
-            </div>
-        </div>
+            <Greeting />
       </PageHeader>
       
-      {/* 1. Connection Status */}
       <ConnectionStatus />
 
+      <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Button size="lg" className="h-20 text-lg" asChild>
+            <Link href="/campaigns/new">
+                <PlusCircle className="mr-4 h-8 w-8" /> Enviar Nova Mensagem
+            </Link>
+        </Button>
+        <Button size="lg" variant="secondary" className="h-20 text-lg" asChild>
+            <Link href="/campaigns">
+                <MessageSquareQuote className="mr-4 h-8 w-8" /> Ver Quem Respondeu
+            </Link>
+        </Button>
+      </div>
+
+
       <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {/* 2. KPIs do Dia */}
         <Card>
             <CardHeader>
                 <CardTitle className='flex items-center justify-between text-base'>
@@ -137,7 +166,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
                 <p className="text-4xl font-bold">{dailyStats.sentToday}</p>
-                <p className='text-sm text-muted-foreground'>Mensagens disparadas nas últimas 24h</p>
+                <p className='text-sm text-muted-foreground'>Mensagens nas últimas 24h</p>
             </CardContent>
         </Card>
         <Card>
@@ -149,7 +178,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
                 <p className="text-4xl font-bold">{dailyStats.inQueue}</p>
-                 <p className='text-sm text-muted-foreground'>Mensagens agendadas ou processando</p>
+                 <p className='text-sm text-muted-foreground'>Aguardando envio</p>
             </CardContent>
         </Card>
         <Card className={dailyStats.errorRate > 5 ? 'border-destructive/50 bg-destructive/10' : ''}>
@@ -161,7 +190,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
                 <p className={`text-4xl font-bold ${dailyStats.errorRate > 5 ? 'text-destructive' : ''}`}>{dailyStats.errorRate}%</p>
-                <p className='text-sm text-muted-foreground'>Falhas de envio nas últimas 24h</p>
+                <p className='text-sm text-muted-foreground'>Falhas de envio hoje</p>
             </CardContent>
         </Card>
         <Card>
@@ -174,13 +203,12 @@ export default function DashboardPage() {
             <CardContent>
                 <p className="text-2xl font-bold mb-2">{`${dailyStats.sentToday}/${dailyStats.dailyLimit}`}</p>
                 <Progress value={(dailyStats.sentToday / dailyStats.dailyLimit) * 100} className='h-3' />
-                 <p className='text-sm text-muted-foreground mt-2'>Cota de envios diária para evitar bans</p>
+                 <p className='text-sm text-muted-foreground mt-2'>Cota de envios diária</p>
             </CardContent>
         </Card>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* 4. Performance Chart & 5. Warnings */}
         <div className="lg:col-span-8 space-y-6">
             <Card>
                 <CardHeader>
@@ -229,29 +257,17 @@ export default function DashboardPage() {
             </Card>
         </div>
 
-        {/* 3. Quick Actions & Warnings */}
         <div className="lg:col-span-4 space-y-6">
-            <Card>
+            <Card className="bg-blue-500/10 border-blue-500/30 text-center">
                 <CardHeader>
-                    <CardTitle>Ações Rápidas</CardTitle>
+                    <CardTitle className="text-blue-800 dark:text-blue-300">Economia do Mês</CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3">
-                    <Button size="lg" asChild>
-                        <Link href="/campaigns/new">
-                            <PlusCircle className="mr-2" /> Novo Disparo
-                        </Link>
-                    </Button>
-                    <Button size="lg" variant="outline">
-                        <Upload className="mr-2" /> Importar Contatos
-                    </Button>
-                     <Button size="lg" variant="outline" asChild>
-                        <Link href="/campaigns">
-                            <TrendingUp className="mr-2" /> Ver Relatórios
-                        </Link>
-                    </Button>
+                <CardContent>
+                    <p className="text-4xl font-bold text-blue-800 dark:text-blue-300">R$ {savingsThisMonth}</p>
+                    <p className="text-sm text-blue-700 dark:text-blue-400 mt-2">Você economizou este valor em comparação com a API Oficial do WhatsApp.</p>
                 </CardContent>
             </Card>
-            <Card>
+             <Card>
                 <CardHeader>
                     <CardTitle>Avisos do Sistema</CardTitle>
                 </CardHeader>
@@ -271,5 +287,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-    

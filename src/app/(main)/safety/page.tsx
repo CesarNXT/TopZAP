@@ -1,3 +1,4 @@
+'use client';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription } from '@/components/page-header';
 import {
   Accordion,
@@ -5,9 +6,42 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Bot, BadgeDollarSign, ShieldCheck, Ban, Flame } from 'lucide-react';
+import React from 'react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 
+
+const EconomyCalculator = () => {
+  const [messages, setMessages] = React.useState(2000);
+  const cost = (messages * 0.30).toFixed(2).replace('.', ',');
+
+  return (
+    <Card className="bg-primary/10 border-primary/30">
+      <CardContent className="pt-6">
+        <div className="grid md:grid-cols-2 gap-6 items-center">
+          <div className="space-y-2">
+            <Label htmlFor="message-count" className='text-lg'>Quantas mensagens você manda por mês?</Label>
+            <Input 
+              id="message-count"
+              type="number"
+              value={messages}
+              onChange={(e) => setMessages(Number(e.target.value))}
+              className="max-w-xs text-lg h-12"
+              placeholder="2000"
+            />
+          </div>
+          <div className="text-center md:text-left">
+            <p className="text-muted-foreground">Na API Oficial, você gastaria aprox.:</p>
+            <p className="text-4xl lg:text-5xl font-bold text-primary">R$ {cost}</p>
+            <p className="font-semibold">Aqui, o custo por mensagem é R$ 0,00.</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function SafetyPage() {
   return (
@@ -20,7 +54,7 @@ export default function SafetyPage() {
       </PageHeader>
       
       <div className="space-y-8">
-        
+        <EconomyCalculator />
         <Accordion type="single" collapsible className="w-full" defaultValue='item-2'>
           <AccordionItem value="item-1">
             <AccordionTrigger className='text-lg'>
@@ -29,9 +63,9 @@ export default function SafetyPage() {
                     <span>O que é a "API Oficial" e quanto custa?</span>
                 </div>
             </AccordionTrigger>
-            <AccordionContent className='text-base pl-12'>
-              <p className='mb-4'>Imagine que a API Oficial é como uma <strong>"Via Expressa com Pedágio"</strong> criada pela dona do WhatsApp (Meta). Ela é super rápida e confiável, mas eles cobram por cada conversa que você inicia.</p>
-              <p className='mb-4'>É voltada para grandes empresas (bancos, companhias aéreas) e o custo é em dólar. Por exemplo, enviar uma campanha para 1.000 clientes pode custar mais de <strong>R$ 300,00 só naquele dia</strong>.</p>
+            <AccordionContent className='text-base pl-12 space-y-4'>
+              <p>Imagine que a API Oficial é como uma <strong>"Via Expressa com Pedágio"</strong> criada pela dona do WhatsApp (Meta). Ela é super rápida e confiável, mas eles cobram por cada conversa que você inicia.</p>
+              <p>É voltada para grandes empresas (bancos, companhias aéreas) e o custo é em dólar. Por exemplo, enviar uma campanha para 1.000 clientes pode custar mais de <strong>R$ 300,00 só naquele dia</strong>.</p>
               <p>No nosso sistema, você envia as mesmas 1.000 mensagens <strong>sem custo extra por mensagem</strong>.</p>
             </AccordionContent>
           </AccordionItem>
@@ -43,8 +77,8 @@ export default function SafetyPage() {
                     <span>Como este sistema funciona?</span>
                 </div>
             </AccordionTrigger>
-            <AccordionContent className='text-base pl-12'>
-               <p className='mb-4'>Nós usamos um sistema inteligente que <strong>simula uma pessoa usando o WhatsApp Web</strong>. É como se você contratasse uma secretária virtual super rápida para digitar, copiar e colar suas mensagens o dia todo, 24h por dia.</p>
+            <AccordionContent className='text-base pl-12 space-y-4'>
+               <p>Nós usamos um sistema inteligente que <strong>simula uma pessoa usando o WhatsApp Web</strong>. É como se você contratasse uma secretária virtual super rápida para digitar, copiar e colar suas mensagens o dia todo, 24h por dia.</p>
                <p>A grande vantagem é a economia: <strong>você não paga nada a mais por mensagem enviada.</strong></p>
             </AccordionContent>
           </AccordionItem>
@@ -56,8 +90,8 @@ export default function SafetyPage() {
                     <span>Existe risco do meu número ser bloqueado?</span>
                 </div>
             </AccordionTrigger>
-            <AccordionContent className='text-base pl-12'>
-               <p className='mb-2'>Sendo 100% transparente: <strong>sim, o risco existe</strong>. Como nosso sistema simula um humano, se você agir como um robô (enviando rápido demais ou sendo denunciado), o WhatsApp pode desconfiar e bloquear seu número.</p>
+            <AccordionContent className='text-base pl-12 space-y-4'>
+               <p>Sendo 100% transparente: <strong>sim, o risco existe</strong>. Como nosso sistema simula um humano, se você agir como um robô (enviando rápido demais ou sendo denunciado), o WhatsApp pode desconfiar e bloquear seu número.</p>
                <p className='font-semibold'>Como evitar isso?</p>
                 <ul className="list-disc space-y-2 pl-6 mt-2">
                     <li>Use sempre o modo de envio <strong>🐢 Seguro (Recomendado)</strong>. A pressa é inimiga da automação.</li>
@@ -75,8 +109,8 @@ export default function SafetyPage() {
                     <span>O que é "Aquecer o Chip"?</span>
                 </div>
             </AccordionTrigger>
-            <AccordionContent className='text-base pl-12'>
-                <p className='mb-4'>"Aquecer" um número de WhatsApp significa simular um comportamento humano normal por um tempo antes de iniciar os envios em massa. Um chip novo que dispara centenas de mensagens no primeiro dia tem altíssima chance de ser banido.</p>
+            <AccordionContent className='text-base pl-12 space-y-4'>
+                <p>"Aquecer" um número de WhatsApp significa simular um comportamento humano normal por um tempo antes de iniciar os envios em massa. Um chip novo que dispara centenas de mensagens no primeiro dia tem altíssima chance de ser banido.</p>
                 <p className='font-semibold'>Como aquecer corretamente?</p>
                 <ol className="list-decimal space-y-2 pl-6 mt-2">
                     <li>Use um chip com <strong>mais de 15 dias de uso</strong> normal.</li>
@@ -93,7 +127,7 @@ export default function SafetyPage() {
                     <span>O que eu NÃO posso fazer de jeito nenhum?</span>
                 </div>
             </AccordionTrigger>
-            <AccordionContent className='text-base pl-12'>
+            <AccordionContent className='text-base pl-12 space-y-4'>
                 <ul className="list-disc space-y-3 pl-6 text-red-700 dark:text-red-400 font-medium">
                     <li><strong>NÃO envie SPAM:</strong> Enviar mensagens para quem não te conhece ou não consentiu é o caminho mais rápido para o bloqueio. Não compre listas de contatos.</li>
                     <li><strong>NÃO use um chip novo:</strong> Chips recém-ativados são muito mais sensíveis. Use um número com histórico de conversas.</li>

@@ -17,8 +17,9 @@ export default function ContactsPage() {
   const [data, setData] = React.useState<Contact[]>(() => [...defaultData]);
   const [isFormOpen, setIsFormOpen] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
+  const [filter, setFilter] = React.useState('all');
 
-  const handleSaveContact = (contactData: Omit<Contact, 'avatarUrl' | 'createdAt'>) => {
+  const handleSaveContact = (contactData: Omit<Contact, 'avatarUrl' | 'createdAt' | 'id'> & {id?: string}) => {
     if (contactData.id) {
         // Edit existing contact
         setData(prev => prev.map(c => c.id === contactData.id ? { ...c, ...contactData } : c));
@@ -48,13 +49,20 @@ export default function ContactsPage() {
     setIsFormOpen(true);
   }
 
+  const filteredData = React.useMemo(() => {
+    if (filter === 'all') return data;
+    if (filter === 'vip') return data.filter(c => c.segment === 'VIP');
+    if (filter === 'blocked') return data.filter(c => c.segment === 'Inactive');
+    return data;
+  }, [data, filter]);
+
   return (
     <div className="container">
       <PageHeader>
         <div className='flex-1'>
           <PageHeaderHeading>Gerenciamento de Contatos</PageHeaderHeading>
           <PageHeaderDescription>
-            Importe, organize e segmente seus contatos para mensagens direcionadas.
+            Importe, organize e agrupe seus contatos para mensagens direcionadas.
           </PageHeaderDescription>
         </div>
         <PageHeaderActions>
@@ -70,9 +78,11 @@ export default function ContactsPage() {
       </PageHeader>
       
       <ContactsTable 
-        data={data}
+        data={filteredData}
         setData={setData}
         onEditRequest={handleEditRequest} 
+        filter={filter}
+        setFilter={setFilter}
       />
 
       <ContactForm

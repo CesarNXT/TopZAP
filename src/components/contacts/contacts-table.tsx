@@ -27,7 +27,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star } from 'lucide-react';
+import { MoreHorizontal, Star, CheckCircle2, XCircle, Ban, Users, Crown, FilterX } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 
@@ -35,6 +35,8 @@ interface ContactsTableProps {
     data: Contact[];
     setData: React.Dispatch<React.SetStateAction<Contact[]>>;
     onEditRequest: (contact: Contact) => void;
+    filter: string;
+    setFilter: (filter: string) => void;
 }
 
 const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (contact: Contact) => void, onDelete: (contact: Contact) => void }) => {
@@ -59,7 +61,7 @@ const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (co
     );
 };
 
-export function ContactsTable({ data, setData, onEditRequest }: ContactsTableProps) {
+export function ContactsTable({ data, setData, onEditRequest, filter, setFilter }: ContactsTableProps) {
     const { toast } = useToast();
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -97,6 +99,15 @@ export function ContactsTable({ data, setData, onEditRequest }: ContactsTablePro
       {
         accessorKey: "phone",
         header: "Telefone",
+        cell: ({ row }) => {
+            const hasWhatsapp = Math.random() > 0.1; // Mock health
+            return (
+                <div className='flex items-center gap-2'>
+                    {hasWhatsapp ? <CheckCircle2 className='h-4 w-4 text-green-500' /> : <XCircle className='h-4 w-4 text-red-500' />}
+                    <span>{row.getValue('phone')}</span>
+                </div>
+            )
+        }
       },
       {
         accessorKey: "segment",
@@ -158,15 +169,21 @@ export function ContactsTable({ data, setData, onEditRequest }: ContactsTablePro
 
   return (
     <>
-        <div className="flex items-center py-4">
+        <div className="flex items-center justify-between py-4">
             <Input
-            placeholder="Filtrar por nome..."
-            value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
-            onChange={(event) =>
-                table.getColumn("name")?.setFilterValue(event.target.value)
-            }
-            className="max-w-sm"
+                placeholder="Filtrar por nome..."
+                value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
+                onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
+                className="max-w-sm"
             />
+            <div className="flex items-center gap-2">
+                <Button variant={filter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('all')}><Users className='mr-2 h-4 w-4'/>Todos</Button>
+                <Button variant={filter === 'vip' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('vip')}><Crown className='mr-2 h-4 w-4'/>Só VIPs</Button>
+                <Button variant={filter === 'blocked' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('blocked')}><Ban className='mr-2 h-4 w-4'/>Só Bloqueados</Button>
+                {filter !== 'all' && (
+                     <Button variant="ghost" size="sm" onClick={() => setFilter('all')}><FilterX className='mr-2 h-4 w-4' />Limpar Filtro</Button>
+                )}
+            </div>
         </div>
       <div className="rounded-md border">
         <Table>
@@ -256,7 +273,6 @@ export function ContactsTable({ data, setData, onEditRequest }: ContactsTablePro
   );
 }
 
-// We need a way to generate UUIDs for new contacts
 declare module 'uuid' {
     export function v4(): string;
 }

@@ -1,5 +1,5 @@
 import { PageHeader, PageHeaderHeading, PageHeaderDescription } from '@/components/page-header';
-import { CreateCampaignForm } from '@/components/campaigns/create-campaign-form';
+import { CreateCampaignWizard } from '@/components/campaigns/create-campaign-wizard';
 
 export default function NewCampaignPage() {
   return (
@@ -7,11 +7,11 @@ export default function NewCampaignPage() {
       <PageHeader className="mb-6">
         <PageHeaderHeading>Criar Nova Campanha</PageHeaderHeading>
         <PageHeaderDescription>
-          Crie, personalize e agende suas campanhas WhatsApp com um preview em tempo real.
+          Siga os passos para criar, personalizar e agendar sua campanha do WhatsApp.
         </PageHeaderDescription>
       </PageHeader>
       
-      <CreateCampaignForm />
+      <CreateCampaignWizard />
     </div>
   );
 }
