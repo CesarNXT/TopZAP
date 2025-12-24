@@ -4,7 +4,7 @@ import React from 'react';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription, PageHeaderActions } from '@/components/page-header';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { Button } from '@/components/ui/button';
-import { PlusCircle } from 'lucide-react';
+import { PlusCircle, Upload } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
@@ -14,32 +14,36 @@ import { contacts as defaultData } from '@/lib/data';
 
 export default function ContactsPage() {
   const { toast } = useToast();
-  const [data, setData] = React.useState<Contact[]>([]);
+  const [data, setData] = React.useState<Contact[]>(defaultData);
   const [isFormOpen, setIsFormOpen] = React.useState(false);
+  const [isImporting, setIsImporting] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
   const [isMounted, setIsMounted] = React.useState(false);
 
   React.useEffect(() => {
     setIsMounted(true);
-    let storedData: Contact[] = [];
     try {
-      const storedContacts = localStorage.getItem('contacts');
-      if (storedContacts) {
-        storedData = JSON.parse(storedContacts);
-      } else {
-        storedData = [...defaultData];
-      }
+        const storedContacts = localStorage.getItem('contacts');
+        if (storedContacts) {
+            setData(JSON.parse(storedContacts));
+        } else {
+            setData([...defaultData]);
+            localStorage.setItem('contacts', JSON.stringify(defaultData));
+        }
     } catch (error) {
-        console.error("Failed to parse contacts from localStorage", error);
-        storedData = [...defaultData];
+        console.error("Failed to access localStorage", error);
+        setData([...defaultData]);
     }
-    setData(storedData);
   }, []);
 
   React.useEffect(() => {
     if (isMounted) {
-      localStorage.setItem('contacts', JSON.stringify(data));
+      try {
+        localStorage.setItem('contacts', JSON.stringify(data));
+      } catch (error) {
+        console.error("Failed to save contacts to localStorage", error);
+      }
     }
   }, [data, isMounted]);
 
@@ -71,6 +75,22 @@ export default function ContactsPage() {
   const handleNewRequest = () => {
     setContactToEdit(null);
     setIsFormOpen(true);
+  }
+
+  const handleImportRequest = () => {
+    setIsImporting(true);
+  }
+
+  const handleImportComplete = (newContacts: Omit<Contact, 'avatarUrl' | 'createdAt' | 'id'>[]) => {
+    const contactsWithIds = newContacts.map(c => ({
+        ...c,
+        id: uuidv4(),
+        createdAt: new Date().toISOString(),
+        avatarUrl: PlaceHolderImages[Math.floor(Math.random() * PlaceHolderImages.length)].imageUrl,
+    }))
+    setData(prev => [...contactsWithIds, ...prev]);
+    toast({ title: `Importação Concluída!`, description: `${newContacts.length} novos contatos foram adicionados.`})
+    setIsImporting(false);
   }
 
   const filteredData = React.useMemo(() => {

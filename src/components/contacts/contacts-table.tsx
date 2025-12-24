@@ -27,7 +27,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, CheckCircle2, XCircle, Ban, Users, Crown, FilterX } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 
@@ -99,14 +99,7 @@ export function ContactsTable({ data, setData, onEditRequest, filter, setFilter 
       {
         accessorKey: "phone",
         header: "Telefone",
-        cell: ({ row }) => {
-            return (
-                <div className='flex items-center gap-2'>
-                    <CheckCircle2 className='h-4 w-4 text-green-500' />
-                    <span>{row.getValue('phone')}</span>
-                </div>
-            )
-        }
+        cell: ({ row }) => row.getValue('phone')
       },
       {
         accessorKey: "segment",
@@ -114,14 +107,14 @@ export function ContactsTable({ data, setData, onEditRequest, filter, setFilter 
         cell: ({ row }) => {
           const segment = row.getValue("segment") as string;
           const segmentMap = {
-            'VIP': { label: 'Cliente VIP', className: 'border-yellow-500 text-yellow-600' },
-            'New': { label: 'Novo', className: 'border-blue-500 text-blue-600' },
-            'Regular': { label: 'Cliente', className: 'border-green-500 text-green-600' },
-            'Inactive': { label: 'Bloqueado', className: 'border-gray-500 text-gray-500 bg-gray-100' },
+            'VIP': { label: 'Cliente VIP', className: 'border-yellow-500/80 text-yellow-600 bg-yellow-500/10' },
+            'New': { label: 'Novo', className: 'border-blue-500/80 text-blue-600 bg-blue-500/10' },
+            'Regular': { label: 'Cliente', className: 'border-green-500/80 text-green-600 bg-green-500/10' },
+            'Inactive': { label: 'Bloqueado', className: 'border-gray-400 text-gray-500 bg-gray-500/10' },
           }
           const currentSegment = segmentMap[segment as keyof typeof segmentMap] || { label: segment, className: '' };
           return (
-              <Badge variant="outline" className={cn(currentSegment.className)}>
+              <Badge variant="outline" className={cn('font-medium', currentSegment.className)}>
                 {segment === 'VIP' && <Star className='mr-1 h-3 w-3' />}
                 {currentSegment.label}
               </Badge>

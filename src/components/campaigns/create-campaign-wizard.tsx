@@ -119,7 +119,7 @@ export function CreateCampaignWizard() {
             status: 'Sent',
             sentDate: new Date().toISOString(),
             recipients: recipientCount,
-            engagement: 0,
+            engagement: Math.floor(Math.random() * (95 - 60 + 1) + 60), // Mock engagement
         };
 
         // Simulate API call
@@ -132,7 +132,6 @@ export function CreateCampaignWizard() {
             try {
                 const existingCampaigns: Campaign[] = JSON.parse(localStorage.getItem('campaigns') || '[]');
                 localStorage.setItem('campaigns', JSON.stringify([newCampaign, ...existingCampaigns]));
-                // Store new campaign ID to be highlighted on the next page
                 sessionStorage.setItem('newlyCreatedCampaignId', newCampaign.id);
             } catch (error) {
                  console.error("Failed to save campaign to localStorage", error);

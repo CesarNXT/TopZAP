@@ -102,7 +102,7 @@ export const columns: ColumnDef<Campaign>[] = [
   ];
 
 export function CampaignsTable() {
-    const [data, setData] = React.useState<Campaign[]>([]);
+    const [data, setData] = React.useState<Campaign[]>(defaultData);
     const [highlightedRow, setHighlightedRow] = React.useState<string | null>(null);
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -110,36 +110,39 @@ export function CampaignsTable() {
 
     React.useEffect(() => {
         setIsMounted(true);
-        let storedData: Campaign[] = [];
         try {
             const storedCampaigns = localStorage.getItem('campaigns');
             if (storedCampaigns) {
-                storedData = JSON.parse(storedCampaigns);
+                setData(JSON.parse(storedCampaigns));
             } else {
-                storedData = [...defaultData];
+                setData([...defaultData]);
+                localStorage.setItem('campaigns', JSON.stringify(defaultData));
+            }
+
+            const newId = sessionStorage.getItem('newlyCreatedCampaignId');
+            if (newId) {
+                setHighlightedRow(newId);
+                sessionStorage.removeItem('newlyCreatedCampaignId');
+
+                const timer = setTimeout(() => {
+                    setHighlightedRow(null);
+                }, 3000);
+
+                return () => clearTimeout(timer);
             }
         } catch (error) {
-            console.error("Failed to parse campaigns from localStorage", error);
-            storedData = [...defaultData];
-        }
-        setData(storedData);
-
-        const newId = sessionStorage.getItem('newlyCreatedCampaignId');
-        if (newId) {
-            setHighlightedRow(newId);
-            sessionStorage.removeItem('newlyCreatedCampaignId');
-
-            const timer = setTimeout(() => {
-                setHighlightedRow(null);
-            }, 3000);
-
-            return () => clearTimeout(timer);
+            console.error("Failed to access localStorage", error);
+            setData([...defaultData]);
         }
     }, []);
 
     React.useEffect(() => {
         if (isMounted) {
-            localStorage.setItem('campaigns', JSON.stringify(data));
+            try {
+                localStorage.setItem('campaigns', JSON.stringify(data));
+            } catch (error) {
+                console.error("Failed to save campaigns to localStorage", error);
+            }
         }
     }, [data, isMounted]);
 
