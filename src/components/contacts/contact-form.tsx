@@ -33,11 +33,13 @@ import { Calendar } from '../ui/calendar';
 import { format } from 'date-fns';
 import type { Contact } from '@/lib/types';
 import { serverTimestamp } from 'firebase/firestore';
+import { ddiList } from '@/lib/ddi-list';
 
 const formSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(2, { message: 'O nome deve ter pelo menos 2 caracteres.' }),
-  phone: z.string().min(10, { message: 'O telefone deve ter pelo menos 10 caracteres.' }),
+  ddi: z.string().default('55'),
+  phone: z.string().min(10, { message: 'O telefone deve ter pelo menos 10 caracteres.' }).max(11, { message: 'O telefone deve ter no máximo 11 caracteres.' }),
   segment: z.enum(['VIP', 'New', 'Regular', 'Inactive']),
   birthday: z.date().optional(),
 });
@@ -58,12 +60,46 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
     return undefined;
   };
   
+  const getInitialPhoneData = () => {
+      if (!contact?.phone) return { ddi: '55', phone: '' };
+      
+      const cleaned = contact.phone.replace(/\D/g, '');
+      // Try to find the matching DDI
+      // Sort DDI list by length desc to match longest code first
+      const sortedDDI = [...ddiList].sort((a, b) => b.code.length - a.code.length);
+      
+      for (const ddi of sortedDDI) {
+          if (cleaned.startsWith(ddi.code)) {
+              return {
+                  ddi: ddi.code,
+                  phone: cleaned.substring(ddi.code.length)
+              };
+          }
+      }
+      
+      // Default fallback if no DDI match found (assume Brazil 55 if not found or just use default)
+      // Or just put everything in phone if no DDI matches?
+      // Let's assume 55 if starts with 55, else default to 55 and put whole number in phone?
+      // Actually, if we can't parse DDI, we might have an issue. 
+      // But let's try to handle cases where number doesn't have DDI stored? 
+      // Existing data might be just "11999999999" without 55? 
+      // If cleaned length is 10 or 11, it's likely BR without 55.
+      if (cleaned.length === 10 || cleaned.length === 11) {
+           return { ddi: '55', phone: cleaned };
+      }
+      
+      return { ddi: '55', phone: cleaned };
+  };
+
+  const initialPhoneData = getInitialPhoneData();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       id: contact?.id,
       name: contact?.name || '',
-      phone: contact?.phone || '',
+      ddi: initialPhoneData.ddi,
+      phone: initialPhoneData.phone,
       segment: contact?.segment || 'New',
       birthday: getInitialBirthday(),
     },
@@ -72,10 +108,29 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
   function onSubmit(values: z.infer<typeof formSchema>) {
     const birthdayString = values.birthday ? format(values.birthday, 'yyyy-MM-dd') : undefined;
     
+    let finalPhone = values.phone.replace(/\D/g, '');
+    
+    // Brazil 9th digit rule
+    if (values.ddi === '55') {
+        if (finalPhone.length === 11) {
+            // Remove the 3rd digit (index 2) which is the 9 after DDD
+            // Example: 11 9 8888 7777 -> 11 8888 7777
+            finalPhone = finalPhone.substring(0, 2) + finalPhone.substring(3);
+        }
+    }
+    
+    const fullPhone = values.ddi + finalPhone;
+
     let dataToSave: Partial<Contact> & { createdAt?: any } = {
         ...values,
-        birthday: birthdayString,
+        phone: fullPhone,
+        birthday: birthdayString || null,
     };
+    
+    // Remove ddi from dataToSave as it is not part of Contact type (if strictly typed)
+    // But Partial<Contact> allows subset. However, 'ddi' is likely not in Contact type.
+    // We should cast or remove it.
+    delete (dataToSave as any).ddi;
     
     if (!values.id) { // New contact
         dataToSave.createdAt = serverTimestamp();
@@ -118,9 +173,42 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Telefone</FormLabel>
-                      <FormControl>
-                        <Input placeholder="+55 11 99999-9999" {...field} />
-                      </FormControl>
+                      <div className="flex gap-2">
+                          <FormField
+                            control={form.control}
+                            name="ddi"
+                            render={({ field: ddiField }) => (
+                                <FormItem className="w-[140px]">
+                                    <Select onValueChange={ddiField.onChange} value={ddiField.value}>
+                                        <FormControl>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="DDI" />
+                                            </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent className="max-h-[300px]">
+                                            {ddiList.map((ddi) => (
+                                                <SelectItem key={ddi.code} value={ddi.code}>
+                                                    {ddi.country} (+{ddi.code})
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FormItem>
+                            )}
+                          />
+                          <FormControl>
+                            <Input 
+                                placeholder="11 99999-9999" 
+                                {...field} 
+                                maxLength={11}
+                                onChange={(e) => {
+                                    // Only allow digits
+                                    const value = e.target.value.replace(/\D/g, '');
+                                    field.onChange(value);
+                                }}
+                            />
+                          </FormControl>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -140,7 +228,6 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
                         <SelectContent>
                           <SelectItem value="New">Novo</SelectItem>
                           <SelectItem value="Regular">Cliente</SelectItem>
-                          <SelectItem value="VIP">Cliente VIP</SelectItem>
                           <SelectItem value="Inactive">Bloqueado</SelectItem>
                         </SelectContent>
                       </Select>

@@ -19,29 +19,34 @@ const formatPhoneNumberForDB = (phone: string | undefined | null): string => {
     // 1. Remove tudo que não for dígito
     let cleaned = phone.replace(/\D/g, '');
 
-    // 2. Garante que começa com 55 (código do Brasil)
+    // 2. Verifica se é número do Brasil (começa com 55)
+    // Se o usuário selecionou DDI 55 no form, o número já vem começando com 55
+    // Se veio de importação CSV sem 55, mas parece BR (10 ou 11 dígitos), assumimos 55
     if (!cleaned.startsWith('55')) {
-        // Se não tem 55 mas parece um número completo (10 ou 11 dígitos), adiciona
         if (cleaned.length === 10 || cleaned.length === 11) {
+             // Assumimos que é Brasil se tiver tamanho típico
             cleaned = '55' + cleaned;
         } else {
-            // Caso contrário, não é um formato reconhecível, retorna o número limpo como está
+            // Se não parece Brasil, retorna como está (outros DDIs)
             return cleaned;
         }
     }
     
-    // 3. Verifica se tem o nono dígito e remove (números de celular no Brasil)
+    // 3. Se for Brasil (começa com 55), aplica a regra de remover o 9º dígito extra
     // Formato com 9º dígito: 55 (DDD: 2 dígitos) (9º: 1 dígito) (Número: 8 dígitos) -> Total 13 dígitos
-    if (cleaned.length === 13) {
+    if (cleaned.startsWith('55') && cleaned.length === 13) {
         const ddd = cleaned.substring(2, 4);
         const numberPart = cleaned.substring(4); // Pega a parte do número
+        
+        // Verifica se o nono dígito é realmente 9
         if (numberPart.startsWith('9')) {
-             // Remove o primeiro '9' da parte do número
+             // Remove o primeiro '9' da parte do número para ficar com 8 dígitos
+             // Resultado: 55 + DDD + 8 dígitos = 12 dígitos
              cleaned = '55' + ddd + numberPart.substring(1);
         }
     }
     
-    // O número final deve ter 12 dígitos (55+DDD+XXXXXXXX)
+    // O número final deve ter 12 dígitos para BR ou o tamanho original para outros países
     return cleaned;
 };
 
@@ -87,7 +92,7 @@ export default function ContactsPage() {
                 phone: dataToSave.phone || '',
                 segment: dataToSave.segment || 'New',
                 createdAt: new Date(),
-                birthday: dataToSave.birthday
+                birthday: dataToSave.birthday || null // Ensure no undefined value
             };
             await addDoc(collection(firestore, 'users', user.uid, 'contacts'), newContact);
             toast({ title: "Contato criado!", description: `${newContact.name} foi adicionado à sua lista.` });
@@ -101,7 +106,7 @@ export default function ContactsPage() {
     }
   };
   
-  const handleBatchImport = async (contacts: Omit<Contact, 'id' | 'userId' | 'createdAt' | 'avatarUrl' | 'phone'> & { phone: string }[]) => {
+  const handleBatchImport = async (contacts: { name: string; phone: string }[]) => {
     if (!user) {
         toast({ title: "Erro", description: "Você precisa estar logado.", variant: "destructive" });
         return;
@@ -194,10 +199,6 @@ export default function ContactsPage() {
             <Button onClick={handleNewRequest}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Novo Contato
-            </Button>
-            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)}>
-                <Trash2 className="mr-2 h-4 w-4" />
-                Excluir Todos
             </Button>
         </PageHeaderActions>
       </PageHeader>

@@ -1,26 +1,37 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase-server';
-import { collection, query, where, getDocs, updateDoc, deleteField, addDoc } from 'firebase/firestore';
+import { db, admin } from '@/lib/firebase-admin';
 import { forceDeleteInstance } from '@/app/actions/whatsapp-actions';
 
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { instance, event, data } = body;
+        console.log('[Webhook] Received payload:', JSON.stringify(body, null, 2));
+
+        let { instance, event, data } = body;
+
+        // Fallback: Try to find instance in data if not at root
+        if (!instance && data?.instance) instance = data.instance;
+        if (!instance && data?.instanceKey) instance = data.instanceKey;
+        
+        // Fallback: Try to find event in data or type
+        if (!event && body.type) event = body.type;
 
         if (!instance || !event) {
-            return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
+            console.error('[Webhook] Missing instance or event', { instance, event, bodyKeys: Object.keys(body) });
+            return NextResponse.json({ error: 'Invalid payload', received: body }, { status: 400 });
         }
 
+        const safeData = data || {};
+
         // 1. Handle Connection Updates
-        if (event === 'CONNECTION_UPDATE') {
-            const { status, connection } = data;
-            const qrCode = data.qrCode || data.qrcode || data.base64;
+        if (event === 'CONNECTION_UPDATE' || event === 'connection') {
+            const { status, connection } = safeData;
+            const qrCode = safeData.qrCode || safeData.qrcode || safeData.base64;
             
             // Find the user who owns this instance
-            const usersRef = collection(db, 'users');
-            const q = query(usersRef, where('uazapi.instanceName', '==', instance));
-            const querySnapshot = await getDocs(q);
+            // Using Admin SDK syntax
+            const usersRef = db.collection('users');
+            const querySnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
 
             if (!querySnapshot.empty) {
                 const userDoc = querySnapshot.docs[0];
@@ -37,21 +48,26 @@ export async function POST(request: Request) {
                         console.error(`[Webhook] Failed to delete instance ${instance} from provider:`, e);
                     }
 
-                    // 2. Remove from DB
-                    await updateDoc(userDoc.ref, {
-                        uazapi: deleteField()
+                    // 2. Update DB status (persist connected=false)
+                    await userDoc.ref.update({
+                        'uazapi.connected': false,
+                        'uazapi.status': 'disconnected',
+                        'uazapi.qrCode': admin.firestore.FieldValue.delete(),
+                        'uazapi.token': admin.firestore.FieldValue.delete()
                     });
                 } else if (status === 'open' || status === 'connected' || connection === 'open') {
                      console.log(`[Webhook] Instance ${instance} connected.`);
-                     await updateDoc(userDoc.ref, {
+                     await userDoc.ref.update({
                         'uazapi.status': 'connected',
-                        'uazapi.qrCode': deleteField() // Clear QR code on connection
+                        'uazapi.connected': true,
+                        'uazapi.qrCode': admin.firestore.FieldValue.delete() // Clear QR code on connection
                      });
                 } else if (qrCode) {
                     console.log(`[Webhook] QR Code received for ${instance}`);
-                    await updateDoc(userDoc.ref, {
+                    await userDoc.ref.update({
                         'uazapi.qrCode': qrCode,
-                        'uazapi.status': 'qrcode'
+                        'uazapi.status': 'connecting',
+                        'uazapi.connected': false
                     });
                 }
             } else {
@@ -61,92 +77,167 @@ export async function POST(request: Request) {
 
         // 1.1 Handle QR Code Updates (specific event)
         if (event === 'QRCODE_UPDATED') {
-            const qrCode = data.qrcode || data.qrCode || data.base64;
-            const usersRef = collection(db, 'users');
-            const q = query(usersRef, where('uazapi.instanceName', '==', instance));
-            const querySnapshot = await getDocs(q);
+            const qrCode = safeData.qrcode || safeData.qrCode || safeData.base64;
+            const usersRef = db.collection('users');
+            const querySnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
 
             if (!querySnapshot.empty) {
                  const userDoc = querySnapshot.docs[0];
                  console.log(`[Webhook] QR Code updated for ${instance}`);
-                 await updateDoc(userDoc.ref, {
+                 await userDoc.ref.update({
                      'uazapi.qrCode': qrCode,
-                     'uazapi.status': 'qrcode'
+                     'uazapi.status': 'connecting'
                  });
             }
         }
 
         // 2. Handle New Messages (Auto-create Contacts)
-        if (event === 'MESSAGES_UPSERT') {
-            const messages = data.messages || [];
+        if (event === 'MESSAGES_UPSERT' || event === 'messages') {
+            const messages = safeData.messages || (safeData.message ? [safeData.message] : []);
 
             for (const msg of messages) {
-                // Filter out API sent messages (fromMe) and Group messages
-                if (msg.key.fromMe) continue; // "excluir wasSentByAPi"
-                if (msg.key.remoteJid.endsWith('@g.us')) continue; // "excluir isGroupYes"
-                if (msg.key.remoteJid === 'status@broadcast') continue;
+                // Filter out API sent messages (fromMe), Group messages, and specific flags requested
+                if (msg?.key?.fromMe) continue; // Exclude own messages
+                if (safeData?.wasSentByApi) continue; // Exclude messages sent by API (if flag present)
+                
+                if (msg?.key?.remoteJid?.endsWith('@g.us')) continue; // Exclude groups
+                if (safeData?.isGroup || safeData?.isGroupYes) continue; // Exclude groups (explicit flags)
+                
+                if (msg?.key?.remoteJid === 'status@broadcast') continue;
 
-                const phone = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+                const phone = String(msg.key.remoteJid).replace('@s.whatsapp.net', '');
                 const pushName = msg.pushName || phone;
 
+                // Check for Block Action
+                let isBlockAction = false;
+                const buttonId = msg.message?.buttonsResponseMessage?.selectedButtonId;
+                const listId = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
+                const textBody = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                
+                if (buttonId === 'BLOCK_CONTACT_ACTION') isBlockAction = true;
+                if (listId === 'BLOCK_CONTACT_ACTION') isBlockAction = true;
+                if (textBody === 'Bloquear Contato') isBlockAction = true;
+
+                if (isBlockAction) {
+                     console.log(`[Webhook] Block action received from ${phone}`);
+                     const usersRef = db.collection('users');
+                     const userSnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
+                     
+                     if (!userSnapshot.empty) {
+                         const userDoc = userSnapshot.docs[0];
+                         const userId = userDoc.id;
+                         const contactsRef = db.collection('users').doc(userId).collection('contacts');
+                         const contactSnapshot = await contactsRef.where('phone', '==', phone).get();
+                         
+                         if (!contactSnapshot.empty) {
+                             const contactDoc = contactSnapshot.docs[0];
+                             await contactDoc.ref.update({
+                                 segment: 'Inactive',
+                                 blockedAt: new Date().toISOString(),
+                                 notes: 'Bloqueado via botão de campanha'
+                             });
+                             console.log(`[Webhook] Contact ${phone} blocked for user ${userId}`);
+                         }
+
+                         // Update Campaign Stats (Blocked)
+                         try {
+                            const campaignsRef = db.collection('users').doc(userId).collection('campaigns');
+                            const campaignSnap = await campaignsRef.orderBy('sentDate', 'desc').limit(1).get();
+                            if (!campaignSnap.empty) {
+                                await campaignSnap.docs[0].ref.update({
+                                    'stats.blocked': admin.firestore.FieldValue.increment(1)
+                                });
+                            }
+                         } catch (e) {
+                             console.error("Failed to update campaign stats (blocked)", e);
+                         }
+                     }
+                     continue; 
+                }
+
                 // Check if contact already exists
-                // Note: Ideally we should scope this by user/organization if possible,
-                // but without multi-tenancy context in the webhook (other than instance),
-                // we'll assume a global contacts list or we need to find the user first.
-                // Since `contacts` is likely a top-level collection in this codebase (based on contacts/page.tsx),
-                // we'll check there. 
-                // Wait, contacts/page.tsx uses `useCollection('contacts')`. 
-                // If the app is multi-user, contacts should probably be sub-collection `users/{uid}/contacts`.
-                // Let's check `contacts/page.tsx` again to be sure about the path.
-                // It imports `useCollection` but `useFirestore` implies standard firestore.
-                // Let's verify the collection path.
-                
-                // Assuming `contacts` is the collection for now.
-                // To support "com o dominio que ele tiver" and "cadastro no nosso sistema",
-                // we need to know WHICH user this contact belongs to.
-                // We can find the user by instance name (like in disconnection logic).
-                
-                const usersRef = collection(db, 'users');
-                const qUser = query(usersRef, where('uazapi.instanceName', '==', instance));
-                const userSnapshot = await getDocs(qUser);
+                const usersRef = db.collection('users');
+                const userSnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
 
                 if (!userSnapshot.empty) {
                     const userDoc = userSnapshot.docs[0];
                     const userId = userDoc.id;
                     
-                    // Now check/add contact for this user
-                    // Checking `contacts` collection. If it's global, we might need an `ownerId` field.
-                    // If it's subcollection `users/{uid}/contacts`, we use that.
-                    // I will check contacts/page.tsx to see how it saves contacts.
-                    
-                    // Re-reading contacts/page.tsx via tool logic is expensive, 
-                    // but I recall `useCollection` often defaults to top level or context based.
-                    // Let's assume `users/{uid}/contacts` is the best practice, 
-                    // OR `contacts` with `userId` field.
-                    
-                    // Let's assume a global `contacts` collection with `userId` for now, 
-                    // or check how `contacts/page.tsx` does it.
-                    // I'll do a quick read of `contacts/page.tsx` snippet if needed, 
-                    // but better yet, I'll search for `addDoc` in `contacts/page.tsx` from previous output.
-                    
-                    // From previous `read` of `contacts/page.tsx`:
-                    // `addDoc(collection(firestore, 'users', user.uid, 'contacts'), ...)`
-                    // Ah! It uses subcollections: `users/{uid}/contacts`.
-                    
-                    const contactsRef = collection(db, 'users', userId, 'contacts');
-                    const qContact = query(contactsRef, where('phone', '==', phone));
-                    const contactSnapshot = await getDocs(qContact);
+                    // Access subcollection users/{uid}/contacts
+                    const contactsRef = db.collection('users').doc(userId).collection('contacts');
+                    const contactSnapshot = await contactsRef.where('phone', '==', phone).get();
 
                     if (contactSnapshot.empty) {
-                        await addDoc(contactsRef, {
+                        await contactsRef.add({
                             name: pushName,
                             phone: phone,
                             email: '',
                             tags: ['auto-created', 'whatsapp'],
-                            createdAt: new Date().toISOString()
+                            createdAt: new Date().toISOString(),
+                            lastReplyAt: new Date().toISOString()
                         });
                         console.log(`[Webhook] Created new contact ${phone} for user ${userId}`);
+                    } else {
+                        // Update lastReplyAt for existing contact
+                        const contactDoc = contactSnapshot.docs[0];
+                        await contactDoc.ref.update({
+                            lastReplyAt: new Date().toISOString()
+                        });
                     }
+
+                    // Update Campaign Stats (Replied)
+                    // Assuming any message that is NOT a block is a reply/engagement
+                    try {
+                        const campaignsRef = db.collection('users').doc(userId).collection('campaigns');
+                        const campaignSnap = await campaignsRef.orderBy('sentDate', 'desc').limit(1).get();
+                        if (!campaignSnap.empty) {
+                            await campaignSnap.docs[0].ref.update({
+                                'stats.replied': admin.firestore.FieldValue.increment(1),
+                                'engagement': admin.firestore.FieldValue.increment(1) // Simple engagement score
+                            });
+                        }
+                     } catch (e) {
+                         console.error("Failed to update campaign stats (replied)", e);
+                     }
+                }
+            }
+        }
+
+        if (event === 'sender') {
+            const usersRef = db.collection('users');
+            const querySnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
+            if (!querySnapshot.empty) {
+                const userDoc = querySnapshot.docs[0];
+                const campaignsRef = userDoc.ref.collection('campaigns');
+                const folderId = safeData.folder_id || safeData.folderId;
+                const status = safeData.status || 'updated';
+                const count = typeof safeData.count === 'number' ? safeData.count : undefined;
+                
+                const payload: any = {
+                    status,
+                    updatedAt: new Date().toISOString(),
+                };
+                
+                if (count !== undefined) payload.count = count;
+                if (safeData.info) {
+                    payload.info = safeData.info;
+                    // Map info to stats
+                    if (safeData.info.sent) payload['stats.sent'] = safeData.info.sent;
+                    if (safeData.info.failed) payload['stats.failed'] = safeData.info.failed;
+                    if (safeData.info.delivered) payload['stats.delivered'] = safeData.info.delivered;
+                } else if (count !== undefined) {
+                    // Fallback if no info object
+                    payload['stats.sent'] = count;
+                }
+
+                if (folderId) {
+                    await campaignsRef.doc(String(folderId)).set(payload, { merge: true });
+                } else {
+                    // If no folderId, we might want to log it or ignore. 
+                    // Usually sender event comes with folderId (campaignId).
+                    // If not, we can't link to a specific campaign easily without context.
+                    // But we'll add it as a new doc just in case to not lose data.
+                     await campaignsRef.add(payload);
                 }
             }
         }

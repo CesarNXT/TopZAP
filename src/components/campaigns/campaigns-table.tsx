@@ -32,7 +32,58 @@ import { useUser } from '@/firebase';
 import { useMemoFirebase } from '@/firebase/provider';
 import { collection, query, orderBy } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
+import { deleteCampaignAction } from '@/app/actions/campaign-actions';
+import { useToast } from '@/hooks/use-toast';
+import { useState } from 'react';
 
+const CampaignActionsCell = ({ campaign }: { campaign: Campaign }) => {
+    const { user } = useUser();
+    const { toast } = useToast();
+    const [isDeleting, setIsDeleting] = useState(false);
+
+    const handleDelete = async () => {
+        if (!user) return;
+        
+        // Simple confirm could be improved with a Dialog, but keeping it simple for now as per "click to delete" pattern
+        // Or better, let's just trigger it. If the user clicks "Excluir", they probably mean it.
+        // But to be safe against accidental clicks in a menu, a small confirm is nice.
+        if (!confirm('Tem certeza que deseja excluir esta campanha?')) return;
+
+        setIsDeleting(true);
+        const result = await deleteCampaignAction(user.uid, campaign.id);
+        setIsDeleting(false);
+
+        if (result.success) {
+            toast({ title: "Campanha excluída com sucesso" });
+        } else {
+            toast({ variant: "destructive", title: "Erro ao excluir", description: result.error });
+        }
+    };
+
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="h-8 w-8 p-0">
+                    <span className="sr-only">Abrir menu</span>
+                    <MoreHorizontal className="h-4 w-4" />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild>
+                    <Link href={`/campaigns/${campaign.id}`}>Ver Relatório</Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem 
+                    className="text-destructive focus:text-destructive cursor-pointer" 
+                    onClick={handleDelete}
+                    disabled={isDeleting}
+                >
+                    {isDeleting ? 'Excluindo...' : 'Excluir Campanha'}
+                </DropdownMenuItem>
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+}
 
 export const columns: ColumnDef<Campaign>[] = [
     {
@@ -45,25 +96,43 @@ export const columns: ColumnDef<Campaign>[] = [
       header: "Status",
       cell: ({ row }) => {
         const status = row.getValue("status") as string;
+        const count = row.original.count || 0;
+        const recipients = row.original.recipients || 0;
+        
         const statusMap = {
-            Sent: 'Enviada',
+            Sent: 'Enviando', // Changed to reflect it might be in progress if count < recipients
             Scheduled: 'Agendada',
             Draft: 'Rascunho',
             Failed: 'Falhou',
+            Completed: 'Concluído'
         }
+
+        // Determine if completed
+        const isCompleted = count >= recipients && recipients > 0;
+        const displayStatus = isCompleted ? 'Completed' : status;
+        const label = statusMap[displayStatus as keyof typeof statusMap] || status;
+
         return (
-          <Badge
-            variant={status === 'Sent' ? 'default' : status === 'Scheduled' ? 'secondary' : 'destructive'}
-            className={cn(
-              'font-semibold',
-              status === 'Sent' && 'bg-primary/20 text-primary-foreground border-transparent hover:bg-primary/30 dark:text-primary',
-              status === 'Scheduled' && 'bg-blue-500/20 text-blue-700 border-transparent hover:bg-blue-500/30 dark:text-blue-400',
-              status === 'Draft' && 'bg-gray-500/20 text-gray-700 border-transparent hover:bg-gray-500/30 dark:text-gray-400',
-              status === 'Failed' && 'bg-red-500/20 text-red-700 border-transparent hover:bg-red-500/30 dark:text-red-400',
-            )}
-          >
-            {statusMap[status as keyof typeof statusMap]}
-          </Badge>
+          <div className="flex flex-col gap-1">
+              <Badge
+                variant={displayStatus === 'Sent' ? 'default' : displayStatus === 'Completed' ? 'default' : displayStatus === 'Scheduled' ? 'secondary' : 'destructive'}
+                className={cn(
+                  'font-semibold w-fit',
+                  displayStatus === 'Sent' && 'bg-blue-500/20 text-blue-700 border-transparent hover:bg-blue-500/30 dark:text-blue-400',
+                  displayStatus === 'Completed' && 'bg-green-500/20 text-green-700 border-transparent hover:bg-green-500/30 dark:text-green-400',
+                  displayStatus === 'Scheduled' && 'bg-yellow-500/20 text-yellow-700 border-transparent hover:bg-yellow-500/30 dark:text-yellow-400',
+                  displayStatus === 'Draft' && 'bg-gray-500/20 text-gray-700 border-transparent hover:bg-gray-500/30 dark:text-gray-400',
+                  displayStatus === 'Failed' && 'bg-red-500/20 text-red-700 border-transparent hover:bg-red-500/30 dark:text-red-400',
+                )}
+              >
+                {label}
+              </Badge>
+              {(displayStatus === 'Sent' || displayStatus === 'Completed') && (
+                  <span className="text-xs text-muted-foreground font-medium">
+                      {count} de {recipients}
+                  </span>
+              )}
+          </div>
         );
       },
     },
@@ -83,27 +152,7 @@ export const columns: ColumnDef<Campaign>[] = [
     },
     {
         id: "actions",
-        cell: ({ row }) => {
-          const campaign = row.original;
-          return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="h-8 w-8 p-0">
-                  <span className="sr-only">Abrir menu</span>
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem asChild>
-                  <Link href={`/campaigns/${campaign.id}`}>Ver Relatório</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem>Duplicar Campanha</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-destructive">Arquivar</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )
-        },
+        cell: ({ row }) => <CampaignActionsCell campaign={row.original} />,
       },
   ];
 

@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import {
-  Loader2, Sparkles, FileText, Image as ImageIcon, Music
+  Loader2, Sparkles, FileText, Image as ImageIcon, Music, Plus, Trash, Lock
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -58,13 +58,89 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
         const newText = text.substring(0, start) + `[${variable}]` + text.substring(end);
         setValue('message', newText, { shouldValidate: true });
         textarea.focus();
-        setTimeout(() => {
-            textarea.selectionStart = textarea.selectionEnd = start + variable.length + 2;
-        }, 0)
+        // Removed setTimeout as it might interfere with focus if component doesn't remount
+        // But since we are fixing the remount issue, setTimeout might be fine. 
+        // However, setting selection immediately is usually better if safe.
+        // Let's keep it simple for now, maybe remove setTimeout if not needed.
+        // The user complained about "typing one letter", which is the remount issue.
+        // But let's try to set selection immediately.
+        requestAnimationFrame(() => {
+             textarea.selectionStart = textarea.selectionEnd = start + variable.length + 2;
+        });
     }
   };
 
-  const MediaUploadSlot = ({ type }: { type: 'media' | 'audio' | 'doc' }) => (
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Etapa 2: Compositor de Mensagem</CardTitle>
+        <CardDescription>Escolha o formato e crie o conteúdo da sua campanha.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+         <Tabs defaultValue="text" className="w-full" onValueChange={setMessageType}>
+            <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="text">📝 Só Texto</TabsTrigger>
+                <TabsTrigger value="media">📸 Foto + Legenda</TabsTrigger>
+                <TabsTrigger value="audio">🎤 Áudio</TabsTrigger>
+                <TabsTrigger value="document">📄 Documento</TabsTrigger>
+            </TabsList>
+            <TabsContent value="text" className='pt-4'>
+                <MessageSlot 
+                    form={form} 
+                    textareaRef={textareaRef} 
+                    handleVariableInsert={handleVariableInsert}
+                    onOptimize={onOptimize}
+                    isOptimizing={isOptimizing}
+                    messageValue={messageValue}
+                />
+                <ButtonManager form={form} />
+            </TabsContent>
+            <TabsContent value="media" className='pt-4 space-y-4'>
+                <MediaUploadSlot form={form} type="media" fileName={fileName} />
+                <MessageSlot 
+                    form={form} 
+                    label="Legenda" 
+                    placeholder="Digite uma legenda opcional..." 
+                    isOptional 
+                    textareaRef={textareaRef}
+                    handleVariableInsert={handleVariableInsert}
+                    onOptimize={onOptimize}
+                    isOptimizing={isOptimizing}
+                    messageValue={messageValue}
+                />
+                <ButtonManager form={form} />
+            </TabsContent>
+            <TabsContent value="audio" className='pt-4 space-y-4'>
+                 <MediaUploadSlot form={form} type="audio" fileName={fileName} />
+            </TabsContent>
+            <TabsContent value="document" className='pt-4 space-y-4'>
+                <MediaUploadSlot form={form} type="doc" fileName={fileName} />
+                <MessageSlot 
+                    form={form} 
+                    label="Legenda" 
+                    placeholder="Digite uma legenda opcional..." 
+                    isOptional 
+                    textareaRef={textareaRef}
+                    handleVariableInsert={handleVariableInsert}
+                    onOptimize={onOptimize}
+                    isOptimizing={isOptimizing}
+                    messageValue={messageValue}
+                />
+            </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface MediaUploadSlotProps {
+    form: UseFormReturn<any>;
+    type: 'media' | 'audio' | 'doc';
+    fileName: string;
+}
+
+function MediaUploadSlot({ form, type, fileName }: MediaUploadSlotProps) {
+    return (
     <FormField
       control={form.control}
       name="media"
@@ -108,8 +184,32 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
       )}
     />
   );
+}
+
+interface MessageSlotProps {
+    form: UseFormReturn<any>;
+    label?: string;
+    placeholder?: string;
+    isOptional?: boolean;
+    textareaRef: React.RefObject<HTMLTextAreaElement>;
+    handleVariableInsert: (variable: string) => void;
+    onOptimize: () => Promise<void>;
+    isOptimizing: boolean;
+    messageValue: string;
+}
   
-  const MessageSlot = ({label = "Mensagem", placeholder = "Olá [Nome], confira nossas novidades...", isOptional=false}) => (
+function MessageSlot({
+    form, 
+    label = "Mensagem", 
+    placeholder = "Olá [Nome], confira nossas novidades...", 
+    isOptional=false,
+    textareaRef,
+    handleVariableInsert,
+    onOptimize,
+    isOptimizing,
+    messageValue
+}: MessageSlotProps) {
+    return (
     <FormField
         control={form.control}
         name="message"
@@ -128,7 +228,12 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                 placeholder={placeholder}
                 className="min-h-[120px] resize-y"
                 {...field}
-                ref={textareaRef}
+                ref={(e) => {
+                    field.ref(e);
+                    if (textareaRef) {
+                        (textareaRef as any).current = e;
+                    }
+                }}
             />
             </FormControl>
             <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -142,37 +247,79 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
         )}
     />
   );
-  
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Etapa 2: Compositor de Mensagem</CardTitle>
-        <CardDescription>Escolha o formato e crie o conteúdo da sua campanha.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-         <Tabs defaultValue="text" className="w-full" onValueChange={setMessageType}>
-            <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="text">📝 Só Texto</TabsTrigger>
-                <TabsTrigger value="media">📸 Foto + Legenda</TabsTrigger>
-                <TabsTrigger value="audio">🎤 Áudio</TabsTrigger>
-                <TabsTrigger value="document">📄 Documento</TabsTrigger>
-            </TabsList>
-            <TabsContent value="text" className='pt-4'>
-                <MessageSlot />
-            </TabsContent>
-            <TabsContent value="media" className='pt-4 space-y-4'>
-                <MediaUploadSlot type="media" />
-                <MessageSlot label="Legenda" placeholder="Digite uma legenda opcional..." isOptional />
-            </TabsContent>
-            <TabsContent value="audio" className='pt-4 space-y-4'>
-                 <MediaUploadSlot type="audio" />
-            </TabsContent>
-            <TabsContent value="document" className='pt-4 space-y-4'>
-                <MediaUploadSlot type="doc" />
-                <MessageSlot label="Legenda" placeholder="Digite uma legenda opcional..." isOptional />
-            </TabsContent>
-        </Tabs>
-      </CardContent>
-    </Card>
-  );
+}
+
+function ButtonManager({ form }: { form: UseFormReturn<any> }) {
+    const { watch, setValue } = form;
+    // We watch 'buttons' but need to handle undefined
+    const buttons = watch('buttons') || [];
+
+    const handleAddButton = () => {
+        // Limit to 2 custom buttons (plus 1 mandatory = 3 total)
+        if (buttons.length >= 2) return;
+        
+        // Generate a simple ID
+        const newId = 'btn_' + Math.random().toString(36).substring(2, 9);
+        const newButtons = [...buttons, { id: newId, text: '' }];
+        setValue('buttons', newButtons);
+    };
+
+    const handleRemoveButton = (index: number) => {
+        const newButtons = [...buttons];
+        newButtons.splice(index, 1);
+        setValue('buttons', newButtons);
+    };
+
+    const handleTextChange = (index: number, text: string) => {
+        const newButtons = [...buttons];
+        newButtons[index].text = text;
+        setValue('buttons', newButtons);
+    };
+
+    return (
+        <div className="space-y-3 pt-4 border-t mt-4">
+            <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium">Botões de Resposta Rápida</h4>
+                <Button 
+                    type="button" 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={handleAddButton} 
+                    disabled={buttons.length >= 2}
+                    className="text-primary hover:text-primary/80"
+                >
+                    <Plus className="h-4 w-4 mr-1" /> Adicionar Botão
+                </Button>
+            </div>
+            
+            <div className="space-y-3">
+                 {/* Mandatory Button */}
+                 <div className="flex items-center gap-2 opacity-80 cursor-not-allowed" title="Este botão é obrigatório para segurança da campanha">
+                    <Button type="button" variant="outline" className="w-full justify-start text-muted-foreground bg-muted/50" disabled>
+                        <Lock className="h-4 w-4 mr-2" /> 
+                        Bloquear Contato (Obrigatório)
+                    </Button>
+                </div>
+
+                {/* Custom Buttons */}
+                {buttons.map((btn: any, index: number) => (
+                    <div key={btn.id || index} className="flex items-center gap-2">
+                        <Input 
+                            placeholder="Texto do Botão (Ex: Sim, eu quero)" 
+                            value={btn.text} 
+                            onChange={(e) => handleTextChange(index, e.target.value)}
+                            className="flex-1"
+                            maxLength={20} 
+                        />
+                         <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveButton(index)} className="text-muted-foreground hover:text-destructive">
+                            <Trash className="h-4 w-4" />
+                        </Button>
+                    </div>
+                ))}
+            </div>
+             <p className="text-xs text-muted-foreground">
+                Adicione até 2 botões personalizados. O botão "Bloquear Contato" será sempre enviado.
+            </p>
+        </div>
+    );
 }

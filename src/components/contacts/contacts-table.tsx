@@ -26,11 +26,12 @@ import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2 } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2 } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useUser, useFirestore } from '@/firebase';
-import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint } from 'firebase/firestore';
+import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint, writeBatch } from 'firebase/firestore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface ContactsTableProps {
     onEditRequest: (contact: Contact) => void;
@@ -43,22 +44,9 @@ interface ContactsTableProps {
 const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (contact: Contact) => void, onDelete: (contact: Contact) => void }) => {
     const contact = row.original;
     return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="h-8 w-8 p-0">
-            <span className="sr-only">Abrir menu</span>
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onEdit(contact)}>Editar</DropdownMenuItem>
-          <DropdownMenuItem>Ver Detalhes</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-destructive" onClick={() => onDelete(contact)}>
-            Remover
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={(e) => { e.stopPropagation(); onDelete(contact); }}>
+            <Trash2 className="h-4 w-4" />
+        </Button>
     );
 };
 
@@ -88,6 +76,9 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
     
     const [contactToDelete, setContactToDelete] = React.useState<Contact | null>(null);
+    const [rowSelection, setRowSelection] = React.useState({});
+    const [isDeletingMultiple, setIsDeletingMultiple] = React.useState(false);
+    
     const tableContainerRef = React.useRef<HTMLDivElement>(null);
     const [isFetchingMore, setIsFetchingMore] = React.useState(false);
     
@@ -95,7 +86,68 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
       setContactToDelete(contact);
     };
 
+    const handleBulkDelete = async () => {
+        if (!user || Object.keys(rowSelection).length === 0) return;
+        
+        if (!confirm(`Tem certeza que deseja excluir ${Object.keys(rowSelection).length} contatos?`)) return;
+
+        setIsDeletingMultiple(true);
+        try {
+            const batch = writeBatch(firestore);
+            const selectedIndices = Object.keys(rowSelection).map(Number);
+            // rowSelection keys are index (string) -> boolean
+            // But we need to map them to actual data. 
+            // table.getRowModel().rows contains the rows in current view.
+            // If we have pagination or infinite scroll, rowSelection might refer to rows across pages if configured?
+            // TanStack table default rowSelection uses row.id if getRowId is provided, or index if not.
+            // We didn't provide getRowId, so it uses index. 
+            // BUT, since we have infinite scroll appending to allContacts, indices match allContacts array.
+            
+            const selectedRowIds = Object.keys(rowSelection).filter(k => rowSelection[k as keyof typeof rowSelection]);
+            const contactsToDelete = selectedRowIds.map(index => allContacts[parseInt(index)]).filter(Boolean);
+            
+            contactsToDelete.forEach(contact => {
+                const docRef = doc(firestore, 'users', user.uid, 'contacts', contact.id);
+                batch.delete(docRef);
+            });
+
+            await batch.commit();
+            
+            // Remove from local state
+            const deletedIds = new Set(contactsToDelete.map(c => c.id));
+            setAllContacts(prev => prev.filter(c => !deletedIds.has(c.id)));
+            setRowSelection({});
+            toast({ title: "Contatos removidos", description: `${contactsToDelete.length} contatos foram removidos.` });
+            onDelete();
+        } catch (error) {
+            console.error("Error deleting contacts:", error);
+            toast({ variant: 'destructive', title: "Erro", description: "Falha ao excluir contatos selecionados." });
+        } finally {
+            setIsDeletingMultiple(false);
+        }
+    };
+
     const columns: ColumnDef<Contact>[] = [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <Checkbox
+            checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+            onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+            aria-label="Select all"
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Select row"
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+      },
       {
         accessorKey: "name",
         header: "Nome",
@@ -166,9 +218,11 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
+    onRowSelectionChange: setRowSelection,
     state: {
       sorting,
       columnFilters,
+      rowSelection,
     },
     meta: {
         onEdit: onEditRequest,
@@ -180,6 +234,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
   const resetAndLoad = React.useCallback((showLoader = true) => {
       setAllContacts([]);
+      setRowSelection({});
       setLastDoc(null);
       setHasMore(true);
       if(showLoader) setIsLoading(true);
@@ -315,7 +370,6 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
             />
             <div className="flex items-center gap-2">
                 <Button variant={filter === 'all' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('all')}><Users className='mr-2 h-4 w-4'/>Todos</Button>
-                <Button variant={filter === 'vip' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('vip')}><Crown className='mr-2 h-4 w-4'/>Só VIPs</Button>
                 <Button variant={filter === 'blocked' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('blocked')}><Ban className='mr-2 h-4 w-4'/>Só Bloqueados</Button>
                 {filter !== 'all' && (
                      <Button variant="ghost" size="sm" onClick={() => setFilter('all')}><FilterX className='mr-2 h-4 w-4' />Limpar</Button>
@@ -361,6 +415,8 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && 'selected'}
+                  onClick={() => onEditRequest(row.original)}
+                  className="cursor-pointer hover:bg-muted/50"
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
@@ -408,7 +464,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                   <AlertDialogTitle>Você tem certeza?</AlertDialogTitle>
                   <AlertDialogDescription>
                     Esta ação não pode ser desfeita. Isso removerá permanentemente o contato
-                    "{contactToDelete?.name}" da sua lista.
+                    &quot;{contactToDelete?.name}&quot; da sua lista.
                   </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

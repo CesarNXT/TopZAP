@@ -41,18 +41,26 @@ import { SpeedSelector } from './speed-selector';
 import { v4 as uuidv4 } from 'uuid';
 import type { Contact, Campaign } from '@/lib/types';
 import { useUser, useFirestore, useCollection } from '@/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
+
+import { createAdvancedCampaignForUser } from '@/app/actions/whatsapp-actions';
 
 const formSchema = z.object({
   name: z.string().min(5, { message: 'O nome da campanha deve ter pelo menos 5 caracteres.' }),
   contactSegment: z.string().min(1, { message: 'Por favor, selecione um grupo de destinatários.' }),
   message: z.string().optional(),
   sendSpeed: z.string().default('safe'),
+  buttons: z.array(z.object({
+    id: z.string(),
+    text: z.string()
+  })).optional(),
   liabilityAccepted: z.boolean().refine((val) => val === true, {
     message: 'Você deve aceitar os termos de responsabilidade para continuar.',
   }),
   media: z.any().optional(),
+  dailyLimit: z.number().min(1, { message: 'Limite diário deve ser pelo menos 1.' }).default(300),
+  startDate: z.string().optional(),
 }).refine(data => data.message || data.media, {
     message: "A campanha precisa ter uma mensagem ou um anexo de mídia.",
     path: ['message'],
@@ -90,6 +98,7 @@ export function CreateCampaignWizard() {
             message: '',
             sendSpeed: 'safe',
             liabilityAccepted: false,
+            dailyLimit: 300,
         },
     });
 
@@ -98,6 +107,9 @@ export function CreateCampaignWizard() {
     const mediaFile = watch('media');
     const sendSpeed = watch('sendSpeed');
     const contactSegment = watch('contactSegment');
+    const buttons = watch('buttons');
+    const dailyLimit = watch('dailyLimit');
+    const startDate = watch('startDate');
 
     const next = async () => {
         const fields = steps[currentStep].fields;
@@ -114,32 +126,211 @@ export function CreateCampaignWizard() {
             toast({ variant: "destructive", title: "Erro", description: "Você precisa estar logado para criar uma campanha." });
             return;
         }
+        try {
+            const userDocRef = doc(firestore, 'users', user.uid);
+            const userSnap = await getDoc(userDocRef);
+            const data = userSnap.data() as any;
+            const isConnected = data?.uazapi?.connected === true || data?.uazapi?.status === 'connected';
+            if (!isConnected) {
+                toast({ variant: "destructive", title: "Erro", description: "Você precisa estar conectado ao WhatsApp para enviar uma campanha." });
+                return;
+            }
+        } catch (e) {
+            toast({ variant: "destructive", title: "Erro", description: "Falha ao verificar conexão com o WhatsApp." });
+            return;
+        }
         setIsSubmitting(true);
 
-        const newCampaign: Omit<Campaign, 'id'> = {
-            name: values.name,
-            status: 'Sent',
-            sentDate: new Date().toISOString(),
-            recipients: recipientCount,
-            engagement: Math.floor(Math.random() * (95 - 60 + 1) + 60), // Mock engagement
-            userId: user.uid,
+        // Prepare messages for uazapi
+        const messagesToSend: any[] = [];
+        if (values.media) {
+            try {
+                const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(file);
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                });
+                const base64 = await toBase64(values.media);
+                
+                if (values.media.type.startsWith('image/')) {
+                    messagesToSend.push({
+                        image: base64,
+                        caption: values.message || " ",
+                        type: 'button' // Hint for whatsapp-actions
+                    });
+                } else if (values.media.type.startsWith('video/')) {
+                     messagesToSend.push({
+                        video: base64,
+                        caption: values.message || " ",
+                        type: 'button'
+                    });
+                } else if (values.media.type.startsWith('audio/')) {
+                    messagesToSend.push({
+                        audio: base64,
+                        type: 'ptt' // Force PTT as requested
+                    });
+                     // If there's a text message with audio, we might need to send it separately or as caption?
+                     // PTT usually doesn't have caption. 
+                     // If user typed a message, we should send it as text after PTT.
+                     if (values.message) {
+                         messagesToSend.push(values.message);
+                     }
+                } else {
+                    // Document or other
+                    // Documents usually don't support buttons in the same message in some APIs
+                    // But we'll try to send it as text + button if we can't attach
+                    // or just send document. 
+                    // Let's try sending as object and let whatsapp-actions handle it
+                    messagesToSend.push({
+                        document: base64,
+                        fileName: values.media.name,
+                        caption: values.message || " "
+                    });
+                }
+            } catch (e) {
+                console.error("File read error", e);
+                toast({ variant: "destructive", title: "Erro", description: "Falha ao processar arquivo de mídia." });
+                setIsSubmitting(false);
+                return;
+            }
+        } else if (values.message) {
+            messagesToSend.push(values.message);
+        }
+
+        // Get active phones
+        const activeContacts = validContacts.filter(c => c.segment !== 'Inactive');
+        const phones = activeContacts.map(c => c.phone).filter(Boolean);
+
+        if (phones.length === 0) {
+            toast({ variant: "destructive", title: "Erro", description: "Nenhum contato válido encontrado para enviar." });
+            setIsSubmitting(false);
+            return;
+        }
+
+        // Call Server Action to Send
+        // Batching Logic for Daily Limits
+        const limit = values.dailyLimit || 300;
+        const totalContacts = phones.length;
+        const batches = [];
+        
+        for (let i = 0; i < totalContacts; i += limit) {
+            batches.push(phones.slice(i, i + limit));
+        }
+
+        const baseDate = values.startDate ? new Date(values.startDate + 'T00:00:00') : new Date();
+        const endDateLimit = values.endDate ? new Date(values.endDate + 'T23:59:59') : null;
+
+        // If user didn't pick a time, assume start as soon as possible (subject to window)
+        // If user picked a date but no time, we might default to 08:00 or now.
+        // For simplicity, let's assume startDate includes time if provided, or we construct it.
+        // But the input type="date" only gives YYYY-MM-DD. We should default to 08:00 if future, or max(08:00, now) if today.
+        
+        let currentDate = new Date(baseDate);
+        
+        // Helper to adjust date to next valid window (08:00 - 19:00)
+        const adjustToWindow = (date: Date) => {
+            const startHour = 8;
+            const endHour = 19;
+            
+            // If it's past 19:00, move to tomorrow 08:00
+            if (date.getHours() >= endHour) {
+                date.setDate(date.getDate() + 1);
+                date.setHours(startHour, 0, 0, 0);
+            }
+            // If it's before 08:00, move to today 08:00
+            else if (date.getHours() < startHour) {
+                date.setHours(startHour, 0, 0, 0);
+            }
+            
+            return date;
         };
 
-        try {
-            const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
-            const docRef = await addDoc(campaignCollection, newCampaign);
+        currentDate = adjustToWindow(currentDate);
+
+        let successCount = 0;
+        let lastDocRef = null;
+
+        for (let i = 0; i < batches.length; i++) {
+            // Check End Date Limit
+            if (endDateLimit && currentDate > endDateLimit) {
+                toast({ 
+                    title: "Limite de Data Atingido", 
+                    description: `Os lotes restantes foram ignorados pois excedem a data limite de ${endDateLimit.toLocaleDateString()}.` 
+                });
+                break;
+            }
+
+            const batchPhones = batches[i];
+            const batchIndex = i + 1;
+            const isMultiBatch = batches.length > 1;
             
+            // Calculate scheduled timestamp (seconds)
+            const scheduledFor = Math.floor(currentDate.getTime() / 1000);
+            
+            const batchName = isMultiBatch ? `${values.name} (Dia ${batchIndex})` : values.name;
+
+            const sendResult = await createAdvancedCampaignForUser(
+                user.uid, 
+                values.sendSpeed as any, 
+                messagesToSend, 
+                batchPhones, 
+                undefined, 
+                scheduledFor, 
+                values.buttons
+            );
+
+            if (sendResult.error) {
+                 toast({ variant: "destructive", title: `Erro no Lote ${batchIndex}`, description: sendResult.error });
+                 continue; // Continue with next batch? Or stop? Let's continue.
+            }
+
+            const newCampaign: Omit<Campaign, 'id'> = {
+                name: batchName,
+                status: 'Scheduled', // Since we are scheduling
+                sentDate: currentDate.toISOString(),
+                recipients: batchPhones.length,
+                engagement: 0,
+                userId: user.uid,
+            };
+
+            try {
+                const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
+                
+                const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId;
+                let docRef;
+    
+                if (uazapiId) {
+                    docRef = doc(campaignCollection, String(uazapiId));
+                    await setDoc(docRef, newCampaign);
+                } else {
+                    docRef = await addDoc(campaignCollection, newCampaign);
+                }
+                
+                lastDocRef = docRef;
+                successCount++;
+
+            } catch (error) {
+                console.error("Failed to save campaign to Firestore", error);
+            }
+
+            // Advance date for next batch (Next Day 08:00)
+            currentDate.setDate(currentDate.getDate() + 1);
+            currentDate.setHours(8, 0, 0, 0);
+        }
+        
+        if (successCount > 0) {
             toast({
-                title: "Campanha Enviada para a Fila!",
-                description: `A campanha "${values.name}" foi iniciada com sucesso.`
+                title: "Campanha Agendada!",
+                description: `${successCount} lote(s) agendado(s) com sucesso.`
             });
             
-            sessionStorage.setItem('newlyCreatedCampaignId', docRef.id);
+            if (lastDocRef) {
+                sessionStorage.setItem('newlyCreatedCampaignId', lastDocRef.id);
+            }
             router.push('/campaigns');
-
-        } catch (error) {
-            console.error("Failed to save campaign to Firestore", error);
-            toast({ variant: "destructive", title: "Erro ao Salvar", description: "Não foi possível salvar a campanha no banco de dados." });
+        } else {
+            toast({ variant: "destructive", title: "Erro", description: "Falha ao criar campanha." });
             setIsSubmitting(false);
         }
     }
@@ -179,11 +370,6 @@ export function CreateCampaignWizard() {
         switch (contactSegment) {
             case 'all':
                 return activeContacts.length;
-            case 'vip':
-                return activeContacts.filter(c => c.segment === 'VIP').length;
-            case 'birthday':
-                const currentMonth = new Date().getMonth();
-                return activeContacts.filter(c => c.birthday && new Date(c.birthday).getMonth() === currentMonth).length;
             default:
                 return 0;
         }
@@ -243,24 +429,11 @@ export function CreateCampaignWizard() {
                                 <FormItem>
                                     <FormLabel>Grupo de Destinatários</FormLabel>
                                     <FormControl>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                                        <div className="grid grid-cols-1 gap-4 pt-2">
                                             <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary')}>
                                                 <Users className="w-8 h-8"/>
                                                 <span className="font-bold text-center">Todos os Contatos</span>
                                             </Label>
-                                            <Label onClick={() => setValue('contactSegment', 'vip', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-yellow-500 transition-all h-32", field.value === 'vip' && 'border-yellow-500 ring-2 ring-yellow-500 text-yellow-600')}>
-                                                <Star className="w-8 h-8"/>
-                                                <span className="font-bold text-center">Clientes VIP</span>
-                                            </Label>
-                                            <Label onClick={() => setValue('contactSegment', 'birthday', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-pink-500 transition-all h-32", field.value === 'birthday' && 'border-pink-500 ring-2 ring-pink-500 text-pink-600')}>
-                                                <Cake className="w-8 h-8"/>
-                                                <span className="font-bold text-center">Aniversariantes do Mês</span>
-                                            </Label>
-                                            <div className="border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 bg-muted/50 text-muted-foreground h-32">
-                                                <ShieldX className="w-8 h-8"/>
-                                                <span className="font-bold text-center">{blockedCount} Contatos Bloqueados</span>
-                                                <span className="text-xs text-center">Estes contatos são ignorados automaticamente.</span>
-                                            </div>
                                         </div>
                                     </FormControl>
                                     <FormMessage />
@@ -372,7 +545,7 @@ export function CreateCampaignWizard() {
         <div className="lg:col-span-1 sticky top-6">
             <Card>
                 <CardHeader><CardTitle>Preview da Mensagem</CardTitle></CardHeader>
-                <CardContent><PhonePreview message={messageValue} media={mediaFile} /></CardContent>
+                <CardContent><PhonePreview message={messageValue || ''} media={mediaFile} buttons={buttons} /></CardContent>
             </Card>
         </div>
     </div>

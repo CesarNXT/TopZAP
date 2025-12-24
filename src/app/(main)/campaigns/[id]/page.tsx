@@ -1,201 +1,155 @@
 'use client';
-import {
-  CheckCircle,
-  XCircle,
-  MessageSquareText,
-  TrendingUp,
-  Loader2,
-  BadgeDollarSign,
-} from 'lucide-react';
-import React from 'react';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+
+import { useEffect, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useUser, useFirestore } from '@/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { Campaign } from '@/lib/types';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { ArrowLeft, MessageSquare, ShieldAlert, CheckCircle2, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import type { Campaign, Contact } from '@/lib/types';
-import { PageHeader, PageHeaderHeading } from '@/components/page-header';
-import { useDoc, useUser, useFirestore, useCollection } from '@/firebase';
-import { doc, collection } from 'firebase/firestore';
-import { useMemoFirebase } from '@/firebase/provider';
+import { Progress } from '@/components/ui/progress';
 
-export default function CampaignReportPage({
-  params,
-}: {
-  params: { id: string };
-}) {
-  const { user } = useUser();
-  const firestore = useFirestore();
+export default function CampaignReportPage() {
+    const { id } = useParams();
+    const { user } = useUser();
+    const firestore = useFirestore();
+    const router = useRouter();
+    const [campaign, setCampaign] = useState<Campaign | null>(null);
+    const [loading, setLoading] = useState(true);
 
-  const campaignRef = useMemoFirebase(() => {
-    if (!user) return null;
-    return doc(firestore, 'users', user.uid, 'campaigns', params.id);
-  }, [firestore, user, params.id]);
+    useEffect(() => {
+        if (!user || !id) return;
+        
+        const docRef = doc(firestore, 'users', user.uid, 'campaigns', id as string);
+        const unsubscribe = onSnapshot(docRef, (snap) => {
+            if (snap.exists()) {
+                setCampaign({ id: snap.id, ...snap.data() } as Campaign);
+            } else {
+                setCampaign(null);
+            }
+            setLoading(false);
+        });
 
-  const { data: campaign, isLoading: isCampaignLoading } = useDoc<Campaign>(campaignRef);
-  
-  const contactsRef = useMemoFirebase(() => {
-    if (!user) return null;
-    return collection(firestore, 'users', user.uid, 'contacts');
-  }, [firestore, user]);
+        return () => unsubscribe();
+    }, [user, id, firestore]);
 
-  const { data: contacts, isLoading: areContactsLoading } = useCollection<Contact>(contactsRef);
+    if (loading) {
+        return (
+            <div className="container mx-auto py-8 flex items-center justify-center">
+                <div className="text-muted-foreground">Carregando relatório...</div>
+            </div>
+        );
+    }
+    
+    if (!campaign) {
+        return (
+            <div className="container mx-auto py-8">
+                <Card>
+                    <CardContent className="py-8 text-center">
+                        <p className="text-muted-foreground">Campanha não encontrada.</p>
+                        <Button variant="link" onClick={() => router.push('/campaigns')}>
+                            Voltar para Campanhas
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
-  const isLoading = isCampaignLoading || areContactsLoading;
+    const stats = campaign.stats || {};
+    const sent = stats.sent || (campaign as any).count || 0;
+    const recipients = campaign.recipients || 1;
+    const progress = Math.min(100, Math.round((sent / recipients) * 100));
+    
+    // Derived stats
+    const replied = stats.replied || 0;
+    const blocked = stats.blocked || 0;
+    const delivered = stats.delivered || 0;
 
-  if (isLoading) {
     return (
-        <div className="container px-4 py-6 md:px-6 lg:py-8">
-            <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="container mx-auto py-8 space-y-8">
+            <div className="flex items-center gap-4">
+                <Button variant="ghost" onClick={() => router.back()}>
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Voltar
+                </Button>
+                <div>
+                    <h1 className="text-3xl font-bold">{campaign.name}</h1>
+                    <div className="flex items-center gap-2 text-muted-foreground mt-1">
+                        <span>Enviada em {new Date(campaign.sentDate).toLocaleDateString()}</span>
+                        <Badge variant={campaign.status === 'Completed' ? 'default' : 'secondary'}>
+                            {campaign.status}
+                        </Badge>
+                    </div>
+                </div>
+            </div>
+
+            {/* Progress Section */}
+            <Card>
+                <CardHeader>
+                    <CardTitle>Progresso do Envio</CardTitle>
+                    <CardDescription>Status atual da execução da campanha.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                            <span>{sent} de {recipients} enviados</span>
+                            <span className="font-bold">{progress}%</span>
+                        </div>
+                        <Progress value={progress} className="h-4" />
+                        <p className="text-xs text-muted-foreground pt-2">
+                            {campaign.status === 'Scheduled' && 'O envio está agendado e será processado automaticamente.'}
+                            {campaign.status === 'Sent' && 'O envio está em andamento.'}
+                            {campaign.status === 'Completed' && 'O envio foi concluído.'}
+                        </p>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">Total de Respostas</CardTitle>
+                        <MessageSquare className="h-4 w-4 text-blue-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{replied}</div>
+                        <p className="text-xs text-muted-foreground">Contatos que responderam</p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">Bloqueios Solicitados</CardTitle>
+                        <ShieldAlert className="h-4 w-4 text-red-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{blocked}</div>
+                        <p className="text-xs text-muted-foreground">Contatos que pediram bloqueio</p>
+                    </CardContent>
+                </Card>
+                 <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">Entregues</CardTitle>
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{delivered || '-'}</div>
+                        <p className="text-xs text-muted-foreground">Mensagens confirmadas</p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">Público Alvo</CardTitle>
+                        <Users className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{recipients}</div>
+                        <p className="text-xs text-muted-foreground">Total de destinatários</p>
+                    </CardContent>
+                </Card>
             </div>
         </div>
-    )
-  }
-  
-  if (!campaign) {
-    return (
-        <div className="container px-4 py-6 md:px-62 lg:py-8">
-            <PageHeader>
-                <PageHeaderHeading>Campanha não encontrada</PageHeaderHeading>
-                <p className="text-muted-foreground mt-2">
-                    A campanha que você está procurando não foi encontrada.
-                </p>
-            </PageHeader>
-        </div>
-    )
-  }
-  
-  const totalSuccess = Math.floor(campaign.recipients * (campaign.engagement / 100));
-
-  const reportData = {
-    campaignName: campaign.name,
-    date: new Date(campaign.sentDate).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
-    stats: {
-      total: campaign.recipients,
-      success: totalSuccess,
-      failed: campaign.recipients - totalSuccess,
-      economySaved: `R$ ${(campaign.recipients * 0.35).toFixed(2).replace('.', ',')}`,
-    },
-    contacts: (contacts || []).map(c => ({ 
-      name: c.name,
-      phone: c.phone,
-      status: Math.random() > 0.2 ? 'Sucesso' : 'Falha', // This part remains mock 
-    })),
-  };
-
-  return (
-    <div className="container px-4 py-6 md:px-6 lg:py-8">
-      <PageHeader className="mb-6">
-        <div>
-          <PageHeaderHeading>Relatório: {reportData.campaignName}</PageHeaderHeading>
-          <p className="text-muted-foreground mt-2">
-            Relatório detalhado da campanha enviada em {reportData.date}.
-          </p>
-        </div>
-      </PageHeader>
-
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-5">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total de Envios</CardTitle>
-            <MessageSquareText className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{reportData.stats.total}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Sucesso</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{reportData.stats.success}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Falhas</CardTitle>
-            <XCircle className="h-4 w-4 text-destructive" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{reportData.stats.failed}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Taxa de Abertura</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{campaign.engagement}%</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-green-50 dark:bg-green-900/20 border-green-500/50">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-green-700 dark:text-green-300">Economia vs API</CardTitle>
-                <BadgeDollarSign className="h-4 w-4 text-green-600" />
-            </CardHeader>
-            <CardContent>
-                <div className="text-2xl font-bold text-green-800 dark:text-green-200">{reportData.stats.economySaved}</div>
-                <p className="text-xs text-green-600 dark:text-green-400">Estimativa vs. API Oficial</p>
-            </CardContent>
-        </Card>
-      </div>
-
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Detalhes por Contato</CardTitle>
-          <CardDescription>
-            Status de entrega para cada contato na campanha (amostra).
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead>Telefone</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {reportData.contacts.slice(0, 10).map((contact, index) => ( // show only 10 on page
-                <TableRow key={index}>
-                  <TableCell className="font-medium">{contact.name}</TableCell>
-                  <TableCell>{contact.phone}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        contact.status === 'Sucesso' ? 'default' : 'destructive'
-                      }
-                      className={
-                        contact.status === 'Sucesso'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
-                          : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300'
-                      }
-                    >
-                      {contact.status}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </div>
-  );
+    );
 }

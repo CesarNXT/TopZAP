@@ -40,14 +40,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <UserMenu />
           </SidebarFooter>
         </Sidebar>
-        <SidebarInset>
-          <div className='p-4 md:p-6'>
+        <SidebarInset className="flex flex-col min-h-screen">
+          <div className='flex-1 p-4 md:p-6'>
             {children}
           </div>
-          <footer className="fixed bottom-0 left-0 md:left-[var(--sidebar-width-icon)] w-full peer-data-[variant=inset]:md:left-[calc(var(--sidebar-width-icon)+theme(spacing.2))] transition-[left] duration-200 ease-linear group-data-[state=expanded]:md:left-[var(--sidebar-width)] peer-data-[state=expanded]:peer-data-[variant=inset]:md:left-[calc(var(--sidebar-width)+theme(spacing.2))] bg-background/80 backdrop-blur-sm z-10">
-            <div className="text-center text-xs text-muted-foreground p-2 border-t">
-              Sistema de automação não-oficial. Use com moderação.
-            </div>
+          <footer className="w-full border-t bg-background/80 p-2 text-center text-xs text-muted-foreground backdrop-blur-sm">
+            Sistema de automação não-oficial. Use com moderação.
           </footer>
         </SidebarInset>
     </SidebarProvider>

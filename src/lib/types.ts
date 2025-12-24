@@ -7,6 +7,9 @@ export type Contact = {
   createdAt: any; // Can be string or Firestore Timestamp
   avatarUrl?: string;
   birthday?: string;
+  blockedAt?: string; // ISO String
+  lastReplyAt?: string; // ISO String
+  notes?: string;
 };
 
 export type Campaign = {
@@ -14,7 +17,17 @@ export type Campaign = {
   userId: string;
   name: string;
   sentDate: string;
-  status: 'Sent' | 'Scheduled' | 'Draft' | 'Failed';
+  startDate?: string;
+  endDate?: string;
+  status: 'Sent' | 'Scheduled' | 'Draft' | 'Failed' | 'Sending' | 'Completed';
   engagement: number;
   recipients: number;
+  stats?: {
+    sent?: number;
+    delivered?: number;
+    read?: number;
+    replied?: number;
+    blocked?: number;
+    failed?: number;
+  };
 };
