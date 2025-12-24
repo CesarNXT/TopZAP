@@ -24,8 +24,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { campaigns, contacts } from '@/lib/data';
-import type { Campaign } from '@/lib/types';
+import { campaigns as defaultCampaigns, contacts as defaultContacts } from '@/lib/data';
+import type { Campaign, Contact } from '@/lib/types';
 import { PageHeader, PageHeaderHeading, PageHeaderActions } from '@/components/page-header';
 
 export default function CampaignReportPage({
@@ -34,7 +34,40 @@ export default function CampaignReportPage({
   params: { id: string };
 }) {
   const [isClient, setIsClient] = useState(false);
-  const campaign = campaigns.find(c => c.id === params.id) as Campaign; // Mock
+  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+
+  useEffect(() => {
+    setIsClient(true);
+    try {
+        const storedCampaigns = localStorage.getItem('campaigns');
+        const allCampaigns = storedCampaigns ? JSON.parse(storedCampaigns) : defaultCampaigns;
+        const currentCampaign = allCampaigns.find((c: Campaign) => c.id === params.id) || null;
+        setCampaign(currentCampaign);
+
+        const storedContacts = localStorage.getItem('contacts');
+        const allContacts = storedContacts ? JSON.parse(storedContacts) : defaultContacts;
+        setContacts(allContacts);
+
+    } catch (error) {
+        console.error("Failed to access localStorage", error);
+        setCampaign(defaultCampaigns.find((c: Campaign) => c.id === params.id) || null);
+        setContacts(defaultContacts);
+    }
+  }, [params.id]);
+
+  if (!campaign) {
+    return (
+        <div className="container px-4 py-6 md:px-6 lg:py-8">
+            <PageHeader>
+                <PageHeaderHeading>Campanha não encontrada</PageHeaderHeading>
+                <p className="text-muted-foreground mt-2">
+                    A campanha que você está procurando não foi encontrada.
+                </p>
+            </PageHeader>
+        </div>
+    )
+  }
 
   const reportData = {
     campaignName: campaign.name,
@@ -42,19 +75,14 @@ export default function CampaignReportPage({
     stats: {
       total: campaign.recipients,
       success: Math.floor(campaign.recipients * (campaign.engagement / 100)),
-      failed: Math.floor(campaign.recipients * (1 - campaign.engagement / 100)),
-      economySaved: (campaign.recipients * 0.3).toFixed(2).replace('.', ','),
+      failed: campaign.recipients - Math.floor(campaign.recipients * (campaign.engagement / 100)),
     },
     contacts: contacts.slice(0, 10).map(c => ({
       name: c.name,
       phone: c.phone,
-      status: Math.random() > 0.2 ? 'Sucesso' : 'Falha',
+      status: Math.random() > 0.2 ? 'Sucesso' : 'Falha', // This part remains mock as per original logic
     })),
   };
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
 
   return (
     <div className="container px-4 py-6 md:px-6 lg:py-8">
@@ -158,3 +186,5 @@ export default function CampaignReportPage({
     </div>
   );
 }
+
+    

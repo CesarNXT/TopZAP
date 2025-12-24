@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { PageHeader, PageHeaderHeading } from '@/components/page-header';
 import {
   Card,
@@ -33,39 +33,16 @@ import {
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
-
-// --- Mock Data ---
-const dailyStats = {
-  sentToday: 150,
-  inQueue: 12,
-  errorRate: 1.3, // percentage
-  dailyLimit: 500,
-};
-
-const weeklyPerformance = [
-  { day: 'Seg', success: 98, fails: 2 },
-  { day: 'Ter', success: 120, fails: 5 },
-  { day: 'Qua', success: 150, fails: 1 },
-  { day: 'Qui', success: 135, fails: 3 },
-  { day: 'Sex', success: 180, fails: 8 },
-  { day: 'Sáb', success: 250, fails: 12 },
-  { day: 'Dom', success: 210, fails: 4 },
-];
-
-const lastSentMessages = [
-    { id: 1, to: "Ana Silva", status: "Sent", campaign: "Promo de Verão" },
-    { id: 2, to: "Bruno Costa", status: "Sent", campaign: "Promo de Verão" },
-    { id: 3, to: "Carla Dias", status: "Failed", campaign: "Promo de Verão" },
-    { id: 4, to: "Daniel Alves", status: "Sent", campaign: "Promo de Verão" },
-    { id: 5, to: "Eduarda Lima", status: "Waiting", campaign: "Lançamento Outono" },
-]
+import type { Campaign } from '@/lib/types';
+import { campaigns as defaultCampaigns } from '@/lib/data';
+import { subDays, format, isToday, parseISO } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 const Greeting = () => {
     // Hardcoded user name for now.
     const userName = "Usuário";
     return <PageHeaderHeading>Olá, {userName}.</PageHeaderHeading>;
 }
-
 
 const ConnectionStatus = () => {
     const status = 'disconnected'; 
@@ -112,6 +89,59 @@ const ConnectionStatus = () => {
 
 
 export default function DashboardPage() {
+    const [isMounted, setIsMounted] = useState(false);
+    const [allCampaigns, setAllCampaigns] = useState<Campaign[]>([]);
+
+    useEffect(() => {
+        setIsMounted(true);
+        try {
+            const storedCampaigns = localStorage.getItem('campaigns');
+            if (storedCampaigns) {
+                setAllCampaigns(JSON.parse(storedCampaigns));
+            } else {
+                localStorage.setItem('campaigns', JSON.stringify(defaultCampaigns));
+                setAllCampaigns(defaultCampaigns);
+            }
+        } catch (error) {
+            console.error("Failed to access localStorage", error);
+            setAllCampaigns(defaultCampaigns);
+        }
+    }, []);
+
+    const dailyStats = {
+        sentToday: allCampaigns.filter(c => c.status === 'Sent' && isToday(parseISO(c.sentDate))).length,
+        inQueue: allCampaigns.filter(c => c.status === 'Scheduled').length,
+        errorRate: allCampaigns.filter(c => c.status === 'Failed' && isToday(parseISO(c.sentDate))).length > 0 ? 
+            (allCampaigns.filter(c => c.status === 'Failed' && isToday(parseISO(c.sentDate))).length / allCampaigns.filter(c => isToday(parseISO(c.sentDate))).length) * 100 
+            : 0,
+        dailyLimit: 300,
+    };
+
+    const weeklyPerformance = Array.from({ length: 7 }).map((_, i) => {
+        const date = subDays(new Date(), i);
+        const sentOnDay = allCampaigns.filter(c => c.sentDate.startsWith(format(date, 'yyyy-MM-dd')));
+        return {
+            day: format(date, 'EEE', { locale: ptBR }),
+            success: sentOnDay.filter(c => c.status === 'Sent').length,
+            fails: sentOnDay.filter(c => c.status === 'Failed').length,
+        };
+    }).reverse();
+
+    const lastSentMessages = allCampaigns
+        .filter(c => c.status === 'Sent' || c.status === 'Failed' || c.status === 'Scheduled')
+        .sort((a, b) => parseISO(b.sentDate).getTime() - parseISO(a.sentDate).getTime())
+        .slice(0, 5)
+        .map(c => ({
+            id: c.id,
+            to: `Campanha para ${c.recipients} contatos`,
+            status: c.status === 'Scheduled' ? 'Waiting' : c.status,
+            campaign: c.name,
+        }));
+
+    if (!isMounted) {
+        return null;
+    }
+
   return (
     <div className="container relative">
       <PageHeader className='pb-4'>
@@ -167,7 +197,7 @@ export default function DashboardPage() {
                 </CardTitle>
             </CardHeader>
             <CardContent>
-                <p className={`text-4xl font-bold ${dailyStats.errorRate > 5 ? 'text-destructive' : ''}`}>{dailyStats.errorRate}%</p>
+                <p className={`text-4xl font-bold ${dailyStats.errorRate > 5 ? 'text-destructive' : ''}`}>{dailyStats.errorRate.toFixed(1)}%</p>
                 <p className='text-sm text-muted-foreground'>Falhas de envio hoje</p>
             </CardContent>
         </Card>
@@ -238,3 +268,5 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+    
