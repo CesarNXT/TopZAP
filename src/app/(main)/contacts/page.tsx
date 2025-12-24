@@ -8,10 +8,9 @@ import { ContactForm } from '@/components/contacts/contact-form';
 import { CsvImportWizard } from '@/components/contacts/csv-import-wizard';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
-import { useUser, useFirestore } from '@/firebase';
+import { useUser, useFirestore, useMemoFirebase } from '@/firebase';
 import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query } from 'firebase/firestore';
 import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
-import { useMemoFirebase } from '@/firebase/provider';
 
 export default function ContactsPage() {
   const { toast } = useToast();
@@ -105,8 +104,8 @@ export default function ContactsPage() {
         return;
     }
     try {
-        const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
-        const q = query(contactsRef);
+        if (!contactsCollectionRef) return;
+        const q = query(contactsCollectionRef);
         const querySnapshot = await getDocs(q);
         
         const batch = writeBatch(firestore);
@@ -166,7 +165,7 @@ export default function ContactsPage() {
       </PageHeader>
       
       <ContactsTable 
-        key={importCounter}
+        importCounter={importCounter}
         onEditRequest={handleEditRequest} 
         onDelete={handleDeleteRequest}
         filter={filter}

@@ -13,12 +13,12 @@ import {
   flexRender,
   getCoreRowModel,
   useReactTable,
-  getPaginationRowModel,
   SortingState,
   getSortedRowModel,
   ColumnFiltersState,
   getFilteredRowModel,
   Row,
+  FilterFn,
 } from "@tanstack/react-table"
 import type { Contact } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -30,14 +30,15 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2 } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { useUser, useFirestore } from '@/firebase';
-import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot } from 'firebase/firestore';
+import { useUser, useFirestore, useMemoFirebase } from '@/firebase';
+import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, endAt, startAt } from 'firebase/firestore';
 
 interface ContactsTableProps {
     onEditRequest: (contact: Contact) => void;
     onDelete: () => void;
     filter: string;
     setFilter: (filter: string) => void;
+    importCounter: number;
 }
 
 const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (contact: Contact) => void, onDelete: (contact: Contact) => void }) => {
@@ -62,7 +63,7 @@ const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (co
     );
 };
 
-export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: ContactsTableProps) {
+export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, importCounter }: ContactsTableProps) {
     const { toast } = useToast();
     const { user } = useUser();
     const firestore = useFirestore();
@@ -77,20 +78,54 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
     const [contactToDelete, setContactToDelete] = React.useState<Contact | null>(null);
     const tableContainerRef = React.useRef<HTMLDivElement>(null);
     const [isFetchingMore, setIsFetchingMore] = React.useState(false);
+    
+    const nameFilter = (columnFilters.find(f => f.id === 'name') as { value: string })?.value || '';
 
+    const resetAndLoad = () => {
+        setContacts([]);
+        setLastDoc(null);
+        setHasMore(true);
+        setIsLoading(true);
+    };
+
+    React.useEffect(() => {
+        resetAndLoad();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [nameFilter, filter, importCounter, user]);
 
     const loadMoreContacts = React.useCallback(async () => {
         if (!user || !hasMore || isFetchingMore) return;
         
         setIsFetchingMore(true);
-        let q;
         const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
+        
+        let queries = [];
 
-        if (lastDoc) {
-            q = query(contactsRef, orderBy("name"), startAfter(lastDoc), limit(50));
-        } else {
-            q = query(contactsRef, orderBy("name"), limit(50));
+        // Name filter
+        if (nameFilter) {
+            const end = nameFilter.replace(/.$/, c => String.fromCharCode(c.charCodeAt(0) + 1));
+            queries.push(where('name', '>=', nameFilter));
+            queries.push(where('name', '<', end));
         }
+
+        // Segment filter
+        if (filter !== 'all') {
+            const segmentMap = {
+                'vip': 'VIP',
+                'blocked': 'Inactive',
+            }
+            queries.push(where('segment', '==', segmentMap[filter as keyof typeof segmentMap]));
+        }
+        
+        queries.push(orderBy('name'));
+        
+        if (lastDoc) {
+            queries.push(startAfter(lastDoc));
+        }
+        
+        queries.push(limit(50));
+
+        const q = query(contactsRef, ...queries);
 
         try {
             const documentSnapshots = await getDocs(q);
@@ -111,21 +146,19 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
             setIsLoading(false);
             setIsFetchingMore(false);
         }
-    }, [user, firestore, lastDoc, hasMore, isFetchingMore, toast]);
+    }, [user, firestore, lastDoc, hasMore, isFetchingMore, toast, nameFilter, filter]);
 
     React.useEffect(() => {
-        // Reset and load initial data when user changes
-        if (user) {
+        if(isLoading) {
             loadMoreContacts();
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user]);
+    }, [isLoading]);
 
      const handleScroll = React.useCallback(() => {
         const container = tableContainerRef.current;
         if (container) {
             const { scrollTop, scrollHeight, clientHeight } = container;
-            // Load more when user is 100px from the bottom
             if (scrollHeight - scrollTop - clientHeight < 100 && !isFetchingMore && hasMore) {
                 loadMoreContacts();
             }
@@ -151,7 +184,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
             }
         }
     };
-
+    
     const columns: ColumnDef<Contact>[] = [
       {
         accessorKey: "name",
@@ -215,16 +248,8 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
       },
     ];
 
-  const filteredData = React.useMemo(() => {
-    if (!contacts) return [];
-    if (filter === 'all') return contacts;
-    if (filter === 'vip') return contacts.filter(c => c.segment === 'VIP');
-    if (filter === 'blocked') return contacts.filter(c => c.segment === 'Inactive');
-    return contacts;
-  }, [contacts, filter]);
-
   const table = useReactTable({
-    data: filteredData,
+    data: contacts,
     columns,
     getCoreRowModel: getCoreRowModel(),
     onSortingChange: setSorting,
@@ -240,14 +265,6 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
         onDelete: handleDeleteRequest,
     }
   });
-
-  if (isLoading && contacts.length === 0) {
-    return (
-      <div className="flex items-center justify-center rounded-md border h-96">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
 
   return (
     <>
@@ -293,7 +310,15 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
             ))}
           </TableHeader>
           <TableBody>
-            {table.getRowModel().rows?.length ? (
+            {isLoading && contacts.length === 0 ? (
+                 <TableRow>
+                    <TableCell colSpan={columns.length} className="h-96 text-center">
+                        <div className="flex justify-center items-center h-full">
+                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                    </TableCell>
+                </TableRow>
+            ) : table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
@@ -356,8 +381,4 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: Co
       </AlertDialog>
     </>
   );
-}
-
-declare module 'uuid' {
-    export function v4(): string;
 }
