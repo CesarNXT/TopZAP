@@ -10,19 +10,20 @@ export function Logo() {
   return (
     <Link
       href="/dashboard"
-      className="flex items-center gap-2.5 font-semibold text-foreground"
+      className="flex items-center justify-center gap-2.5 font-semibold text-foreground p-2"
     >
       <Image 
         src="https://files.catbox.moe/1isrb2.png"
         alt="TOPzap Logo"
-        width={210}
-        height={60}
+        width={350}
+        height={100}
         className={cn(
           'transition-opacity duration-200',
           state === 'collapsed' ? 'opacity-0 w-0' : 'opacity-100 w-auto'
         )}
-        style={{ width: 'auto', height: '60px' }}
+        style={{ width: 'auto', height: '100px' }}
         unoptimized
+        priority
       />
     </Link>
   );
