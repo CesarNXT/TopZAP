@@ -60,19 +60,24 @@ export default function LoginPage() {
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
-      // Check if user exists in Firestore, if not, create a document
-      const userDocRef = doc(firestore, "users", user.uid);
-      const userDoc = await getDoc(userDocRef);
-
-      if (!userDoc.exists()) {
-        await setDoc(userDocRef, {
-          id: user.uid,
-          name: user.displayName,
-          email: user.email,
-        });
-      }
-
+      // Redirect immediately for a better user experience
       router.push('/dashboard');
+
+      // Perform Firestore check and write in the background
+      const userDocRef = doc(firestore, "users", user.uid);
+      getDoc(userDocRef).then((userDoc) => {
+        if (!userDoc.exists()) {
+          setDoc(userDocRef, {
+            id: user.uid,
+            name: user.displayName,
+            email: user.email,
+          }).catch(dbError => {
+            console.error("Failed to create user document in background:", dbError);
+            // Optionally, show a non-blocking toast message
+          });
+        }
+      });
+      
     } catch (error: any) {
       toast({
         variant: "destructive",
