@@ -1,6 +1,5 @@
 'use client';
 import {
-  Download,
   CheckCircle,
   XCircle,
   MessageSquareText,
@@ -16,7 +15,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -27,13 +25,10 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import type { Campaign, Contact } from '@/lib/types';
-import { PageHeader, PageHeaderHeading, PageHeaderActions } from '@/components/page-header';
+import { PageHeader, PageHeaderHeading } from '@/components/page-header';
 import { useDoc, useUser, useFirestore, useCollection } from '@/firebase';
 import { doc, collection } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
-import { PDFDownloadLink } from '@react-pdf/renderer';
-import { CampaignPDF } from '@/components/campaigns/campaign-pdf';
-
 
 export default function CampaignReportPage({
   params,
@@ -42,11 +37,6 @@ export default function CampaignReportPage({
 }) {
   const { user } = useUser();
   const firestore = useFirestore();
-  const [isClient, setIsClient] = React.useState(false);
-
-  React.useEffect(() => {
-    setIsClient(true);
-  }, []);
 
   const campaignRef = useMemoFirebase(() => {
     if (!user) return null;
@@ -98,7 +88,7 @@ export default function CampaignReportPage({
       failed: campaign.recipients - totalSuccess,
       economySaved: `R$ ${(campaign.recipients * 0.35).toFixed(2).replace('.', ',')}`,
     },
-    contacts: (contacts || []).slice(0, 100).map(c => ({ // limit to 100 for pdf
+    contacts: (contacts || []).map(c => ({ 
       name: c.name,
       phone: c.phone,
       status: Math.random() > 0.2 ? 'Sucesso' : 'Falha', // This part remains mock 
@@ -114,30 +104,6 @@ export default function CampaignReportPage({
             Relatório detalhado da campanha enviada em {reportData.date}.
           </p>
         </div>
-        <PageHeaderActions>
-            {isClient ? (
-                <PDFDownloadLink
-                document={<CampaignPDF data={reportData} />}
-                fileName={`Relatorio_${reportData.campaignName.replace(/\s+/g, '_')}.pdf`}
-                >
-                {({ loading }) => (
-                    <Button disabled={loading}>
-                    {loading ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                        <Download className="mr-2 h-4 w-4" />
-                    )}
-                    Baixar PDF
-                    </Button>
-                )}
-                </PDFDownloadLink>
-            ) : (
-                <Button disabled>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Baixar PDF
-                </Button>
-            )}
-        </PageHeaderActions>
       </PageHeader>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-5">
