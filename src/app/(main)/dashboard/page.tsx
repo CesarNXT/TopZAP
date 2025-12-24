@@ -152,8 +152,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className="mt-6 grid grid-cols-1 gap-6">
+        <div className="space-y-6">
             <Card className="shadow-sm">
                 <CardHeader>
                     <CardTitle>Desempenho da Semana</CardTitle>
@@ -171,43 +171,6 @@ export default function DashboardPage() {
                     </ResponsiveContainer>
                 </CardContent>
             </Card>
-        </div>
-        <div className="lg:col-span-1">
-          <Card className="shadow-sm">
-              <CardHeader className='flex-row items-center justify-between'>
-                <div>
-                    <CardTitle>Últimos Envios</CardTitle>
-                    <CardDescription>Mini-histórico das últimas mensagens.</CardDescription>
-                </div>
-                <Button asChild size="sm" id="tour-new-campaign">
-                    <Link href="/campaigns/new">
-                        <PlusCircle className="mr-2 h-4 w-4" />
-                        Nova Campanha
-                    </Link>
-                </Button>
-            </CardHeader>
-            <CardContent>
-                <div className="space-y-4">
-                    {lastSentMessages.map(msg => (
-                          <div key={msg.id} className="flex items-center justify-between">
-                            <div className='space-y-1'>
-                                <p className="font-medium">{msg.to}</p>
-                                <p className="text-sm text-muted-foreground">{msg.campaign}</p>
-                            </div>
-                            <Badge variant={
-                                msg.status === 'Sent' ? 'default' : 
-                                msg.status === 'Failed' ? 'destructive' : 'secondary'
-                            }
-                            className={
-                                msg.status === 'Sent' ? 'bg-primary/20 text-primary-foreground dark:text-primary' :
-                                msg.status === 'Waiting' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' : ''
-                            }
-                            >{msg.status}</Badge>
-                        </div>
-                    ))}
-                </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>
