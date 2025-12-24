@@ -20,7 +20,6 @@ import {
   getFilteredRowModel,
   Row,
 } from "@tanstack/react-table"
-import { contacts as defaultData } from '@/lib/data';
 import type { Contact } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '../ui/input';
@@ -30,12 +29,11 @@ import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
 import { MoreHorizontal, Star } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
-import { ContactForm } from './contact-form';
 import { useToast } from '@/hooks/use-toast';
-import { v4 as uuidv4 } from 'uuid';
-import { PlaceHolderImages } from '@/lib/placeholder-images';
 
 interface ContactsTableProps {
+    data: Contact[];
+    setData: React.Dispatch<React.SetStateAction<Contact[]>>;
     onEditRequest: (contact: Contact) => void;
 }
 
@@ -61,40 +59,12 @@ const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (co
     );
 };
 
-export function ContactsTable() {
+export function ContactsTable({ data, setData, onEditRequest }: ContactsTableProps) {
     const { toast } = useToast();
-    const [data, setData] = React.useState<Contact[]>(() => [...defaultData]);
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
     const [contactToDelete, setContactToDelete] = React.useState<Contact | null>(null);
-    const [isFormOpen, setIsFormOpen] = React.useState(false);
-    const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
-
-
-    const handleSaveContact = (contactData: Omit<Contact, 'avatarUrl' | 'createdAt'>) => {
-        if (contactData.id) {
-            // Edit existing contact
-            setData(prev => prev.map(c => c.id === contactData.id ? { ...c, ...contactData } : c));
-            toast({ title: "Contato atualizado!", description: `${contactData.name} foi atualizado com sucesso.` });
-        } else {
-            // Add new contact
-            const newContact: Contact = {
-                ...contactData,
-                id: uuidv4(),
-                createdAt: new Date().toISOString(),
-                avatarUrl: PlaceHolderImages[Math.floor(Math.random() * PlaceHolderImages.length)].imageUrl,
-            };
-            setData(prev => [newContact, ...prev]);
-            toast({ title: "Contato criado!", description: `${newContact.name} foi adicionado à sua lista.` });
-        }
-        setContactToEdit(null);
-    };
-
-    const handleEdit = (contact: Contact) => {
-        setContactToEdit(contact);
-        setIsFormOpen(true);
-    };
-
+    
     const handleDeleteRequest = (contact: Contact) => {
         setContactToDelete(contact);
     };
@@ -163,7 +133,7 @@ export function ContactsTable() {
       },
       {
           id: "actions",
-          cell: ({ row }) => <ActionsCell row={row} onEdit={handleEdit} onDelete={handleDeleteRequest} />,
+          cell: ({ row }) => <ActionsCell row={row} onEdit={onEditRequest} onDelete={handleDeleteRequest} />,
       },
     ];
 
@@ -181,7 +151,7 @@ export function ContactsTable() {
       columnFilters,
     },
     meta: {
-        onEdit: handleEdit,
+        onEdit: onEditRequest,
         onDelete: handleDeleteRequest,
     }
   });
@@ -282,18 +252,6 @@ export function ContactsTable() {
               </AlertDialogFooter>
           </AlertDialogContent>
       </AlertDialog>
-
-      <ContactForm
-        isOpen={isFormOpen}
-        onOpenChange={(isOpen) => {
-            setIsFormOpen(isOpen);
-            if (!isOpen) {
-                setContactToEdit(null);
-            }
-        }}
-        contact={contactToEdit}
-        onSave={handleSaveContact}
-       />
     </>
   );
 }
