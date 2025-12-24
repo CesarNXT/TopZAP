@@ -24,8 +24,8 @@ export default function RootLayout({
       <body className={cn('min-h-screen bg-slate-50 font-sans antialiased', inter.variable)}>
         <ThemeProvider
             attribute="class"
-            defaultTheme="system"
-            enableSystem
+            defaultTheme="light"
+            enableSystem={false}
             disableTransitionOnChange
         >
             <FirebaseClientProvider>

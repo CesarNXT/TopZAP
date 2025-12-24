@@ -1,19 +1,19 @@
 'use client';
-import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import { useTutorial } from '@/components/tutorial-provider';
 import { PlayCircle } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 
 export default function TutorialPage() {
   const { startTutorial } = useTutorial();
   const router = useRouter();
 
   const handleStart = () => {
-    // Navigate to dashboard first, then start the tutorial
+    // Primeiro, navega para o dashboard para garantir que os alvos do tour estejam visíveis
     router.push('/dashboard');
-    // A small delay ensures the dashboard has time to render before the tour starts
+    
+    // Um pequeno atraso para dar tempo ao dashboard de renderizar antes do tour começar
     setTimeout(() => {
         startTutorial();
     }, 300);

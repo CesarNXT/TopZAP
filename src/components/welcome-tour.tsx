@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Joyride, { Step, CallBackProps } from 'react-joyride';
+import Joyride, { Step, CallBackProps, STATUS } from 'react-joyride';
 import { useTutorial } from './tutorial-provider';
 import { useTheme } from 'next-themes';
 
@@ -22,7 +22,7 @@ const tourSteps: Step[] = [
     {
       target: '#tour-stats-card',
       title: 'Seus Resultados',
-      content: 'Aqui você vai ver quantas mensagens foram enviadas e sua economia.',
+      content: 'Aqui você vai ver quantas mensagens foram enviadas.',
        placement: 'bottom',
     },
     {
@@ -34,15 +34,20 @@ const tourSteps: Step[] = [
   ];
 
 export function WelcomeTour() {
-  const { isTourRunning, completeTutorial } = useTutorial();
+  const { isTourRunning, completeTutorial, runTour } = useTutorial();
   const { theme } = useTheme();
 
   const handleJoyrideCallback = (data: CallBackProps) => {
-    const { status } = data;
-    const finishedStatuses: string[] = ['finished', 'skipped'];
+    const { status, action } = data;
+    const finishedStatuses: string[] = [STATUS.FINISHED, STATUS.SKIPPED];
 
     if (finishedStatuses.includes(status)) {
       completeTutorial();
+    }
+    
+    // If the user closes the tour with the 'X' button
+    if (action === 'close') {
+        completeTutorial();
     }
   };
 
@@ -56,14 +61,15 @@ export function WelcomeTour() {
         callback={handleJoyrideCallback}
         styles={{
             options: {
-              arrowColor: theme === 'dark' ? '#1f2937' : '#fff',
-              backgroundColor: theme === 'dark' ? '#1f2937' : '#fff',
-              primaryColor: '#128C7E',
+              arrowColor: theme === 'dark' ? '#111827' : '#fff',
+              backgroundColor: theme === 'dark' ? '#111827' : '#fff',
+              primaryColor: '#25D366',
               textColor: theme === 'dark' ? '#f8fafc' : '#0f172a',
               zIndex: 1000,
             },
             buttonNext: {
                 backgroundColor: '#25D366',
+                color: 'white'
             },
             buttonBack: {
                 color: theme === 'dark' ? '#f8fafc' : '#0f172a'
