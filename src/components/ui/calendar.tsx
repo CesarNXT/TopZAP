@@ -16,15 +16,18 @@ const DayPicker = ({
   selected?: Date;
   onSelect?: (date?: Date) => void;
   disabled?: (date: Date) => boolean;
-  initialFocus?: boolean;
 }) => {
-  const { selected, onSelect, initialFocus, ...rest } = props as any;
+  const { selected, onSelect, disabled, ...rest } = props as any;
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (onSelect) {
       onSelect(e.target.value ? new Date(e.target.value) : undefined);
     }
   }
+
+  // A simple check if disabled is a function and if the selected date should be disabled.
+  // This is a basic implementation. A real one would check the input field's value.
+  const isDateDisabled = typeof disabled === 'function' && selected ? disabled(selected) : false;
 
   return (
     <div className={cn("p-3", className)} {...rest}>
@@ -34,6 +37,7 @@ const DayPicker = ({
           className="w-full p-2 border rounded-md"
           onChange={handleDateChange}
           value={selected ? selected.toISOString().split('T')[0] : ''}
+          disabled={isDateDisabled}
         />
     </div>
   )
@@ -45,7 +49,6 @@ export type CalendarProps = React.ComponentProps<typeof DayPicker>
 function Calendar({
   className,
   classNames,
-  showOutsideDays = true,
   ...props
 }: CalendarProps) {
   return (
