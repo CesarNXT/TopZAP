@@ -31,7 +31,7 @@ import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2 } from 'lucid
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useUser, useFirestore, useMemoFirebase } from '@/firebase';
-import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, endAt, startAt } from 'firebase/firestore';
+import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, endAt, startAt, or, QueryConstraint } from 'firebase/firestore';
 
 interface ContactsTableProps {
     onEditRequest: (contact: Contact) => void;
@@ -99,13 +99,22 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
         setIsFetchingMore(true);
         const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
         
-        let queries = [];
+        let queries: QueryConstraint[] = [];
 
         // Name filter
         if (nameFilter) {
-            const end = nameFilter.replace(/.$/, c => String.fromCharCode(c.charCodeAt(0) + 1));
-            queries.push(where('name', '>=', nameFilter));
-            queries.push(where('name', '<', end));
+            const normalizedFilter = nameFilter.toLowerCase();
+            const capitalizedFilter = normalizedFilter.charAt(0).toUpperCase() + normalizedFilter.slice(1);
+            
+            const endLower = normalizedFilter.replace(/.$/, c => String.fromCharCode(c.charCodeAt(0) + 1));
+            const endCapitalized = capitalizedFilter.replace(/.$/, c => String.fromCharCode(c.charCodeAt(0) + 1));
+
+            queries.push(
+                or(
+                    where('name', '>=', normalizedFilter),
+                    where('name', '>=', capitalizedFilter)
+                )
+            );
         }
 
         // Segment filter
@@ -129,8 +138,14 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
 
         try {
             const documentSnapshots = await getDocs(q);
-            const newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
             
+            let newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
+
+            if (nameFilter) {
+                const normalizedFilter = nameFilter.toLowerCase();
+                newContacts = newContacts.filter(contact => contact.name.toLowerCase().startsWith(normalizedFilter));
+            }
+
             setContacts(prev => lastDoc ? [...prev, ...newContacts] : newContacts);
 
             const lastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
@@ -194,7 +209,7 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
           return (
             <div className="flex items-center gap-3">
               <Avatar className="h-8 w-8">
-                <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                <AvatarFallback>{contact.name.charAt(0).toUpperCase()}</AvatarFallback>
               </Avatar>
               <span className="font-medium">{contact.name}</span>
             </div>
@@ -382,3 +397,5 @@ export function ContactsTable({ onEditRequest, onDelete, filter, setFilter, impo
     </>
   );
 }
+
+    
