@@ -3,14 +3,15 @@ import React from 'react';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription, PageHeaderActions } from '@/components/page-header';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { Button } from '@/components/ui/button';
-import { PlusCircle, Upload } from 'lucide-react';
+import { PlusCircle, Upload, Trash2 } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { CsvImportWizard } from '@/components/contacts/csv-import-wizard';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
 import { PlaceHolderImages } from '@/lib/placeholder-images';
-import { useUser, useFirestore } from '@/firebase';
-import { doc, setDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
+import { useUser, useFirestore, useCollection } from '@/firebase';
+import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query } from 'firebase/firestore';
+import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
 
 export default function ContactsPage() {
   const { toast } = useToast();
@@ -19,8 +20,13 @@ export default function ContactsPage() {
 
   const [isFormOpen, setIsFormOpen] = React.useState(false);
   const [isImportWizardOpen, setIsImportWizardOpen] = React.useState(false);
+  const [isDeleteAllOpen, setIsDeleteAllOpen] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
+  
+  const { data: contacts } = useCollection<Contact>(
+    user ? collection(firestore, 'users', user.uid, 'contacts') : null
+  );
 
   const handleSaveContact = async (contactData: Partial<Contact>) => {
     if (!user) {
@@ -90,6 +96,32 @@ export default function ContactsPage() {
     }
   };
 
+  const handleDeleteAllContacts = async () => {
+    if (!user) {
+        toast({ title: "Erro", description: "Você precisa estar logado.", variant: "destructive" });
+        return;
+    }
+    try {
+        const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
+        const q = query(contactsRef);
+        const querySnapshot = await getDocs(q);
+        
+        const batch = writeBatch(firestore);
+        querySnapshot.forEach((doc) => {
+            batch.delete(doc.ref);
+        });
+        
+        await batch.commit();
+        
+        toast({ title: "Sucesso!", description: "Todos os contatos foram excluídos." });
+    } catch (error: any) {
+        console.error("Error deleting all contacts:", error);
+        toast({ title: "Erro ao excluir", description: error.message || "Não foi possível excluir todos os contatos.", variant: "destructive" });
+    } finally {
+        setIsDeleteAllOpen(false);
+    }
+  };
+
   const handleEditRequest = (contact: Contact) => {
     setContactToEdit(contact);
     setIsFormOpen(true);
@@ -118,6 +150,10 @@ export default function ContactsPage() {
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Novo Contato
             </Button>
+            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)} disabled={!contacts || contacts.length === 0}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Excluir Todos
+            </Button>
         </PageHeaderActions>
       </PageHeader>
       
@@ -144,6 +180,12 @@ export default function ContactsPage() {
         isOpen={isImportWizardOpen}
         onOpenChange={setIsImportWizardOpen}
         onImport={handleBatchImport}
+      />
+
+      <DeleteAllContactsDialog
+        isOpen={isDeleteAllOpen}
+        onOpenChange={setIsDeleteAllOpen}
+        onConfirm={handleDeleteAllContacts}
       />
     </div>
   );
