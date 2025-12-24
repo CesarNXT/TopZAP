@@ -12,6 +12,7 @@ import { PlaceHolderImages } from '@/lib/placeholder-images';
 import { useUser, useFirestore, useCollection } from '@/firebase';
 import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query } from 'firebase/firestore';
 import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
+import { useMemoFirebase } from '@/firebase/provider';
 
 export default function ContactsPage() {
   const { toast } = useToast();
@@ -24,9 +25,12 @@ export default function ContactsPage() {
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
   
-  const { data: contacts } = useCollection<Contact>(
-    user ? collection(firestore, 'users', user.uid, 'contacts') : null
-  );
+  const contactsCollectionRef = useMemoFirebase(() => {
+    if (!user) return null;
+    return collection(firestore, 'users', user.uid, 'contacts');
+  }, [firestore, user]);
+
+  const { data: contacts } = useCollection<Contact>(contactsCollectionRef);
 
   const handleSaveContact = async (contactData: Partial<Contact>) => {
     if (!user) {
