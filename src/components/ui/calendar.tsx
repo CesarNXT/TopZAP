@@ -1,62 +1,46 @@
 "use client"
 
 import * as React from "react"
-import { ChevronLeft, ChevronRight } from "lucide-react"
-
 import { cn } from "@/lib/utils"
-import { buttonVariants } from "@/components/ui/button"
 
-// A simple placeholder since react-day-picker is removed.
-// In a real scenario, you'd replace this with a different calendar or your own implementation.
-const DayPicker = ({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement> & {
-  mode?: 'single';
+export type CalendarProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  onSelect?: (date: Date | undefined) => void;
   selected?: Date;
-  onSelect?: (date?: Date) => void;
-  disabled?: (date: Date) => boolean;
-  initialFocus?: boolean;
-}) => {
-  const { selected, onSelect, disabled, initialFocus, ...rest } = props as any;
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (onSelect) {
-      onSelect(e.target.value ? new Date(e.target.value) : undefined);
-    }
-  }
-
-  // A simple check if disabled is a function and if the selected date should be disabled.
-  // This is a basic implementation. A real one would check the input field's value.
-  const isDateDisabled = typeof disabled === 'function' && selected ? disabled(selected) : false;
-
-  return (
-    <div className={cn("p-3", className)} {...rest}>
-        <p className="text-sm text-center text-muted-foreground mb-2">Calendar functionality is limited.</p>
-        <input 
-          type="date"
-          className="w-full p-2 border rounded-md"
-          onChange={handleDateChange}
-          value={selected ? selected.toISOString().split('T')[0] : ''}
-          disabled={isDateDisabled}
-        />
-    </div>
-  )
 }
 
+function Calendar({ className, onSelect, selected, ...props }: CalendarProps) {
 
-export type CalendarProps = React.ComponentProps<typeof DayPicker>
+  const formatDateForInput = (date: Date | undefined) => {
+    if (!date) return '';
+    // Adjust for timezone offset to prevent date changes
+    const adjustedDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
+    return adjustedDate.toISOString().split('T')[0];
+  }
 
-function Calendar({
-  className,
-  classNames,
-  ...props
-}: CalendarProps) {
+  const handleDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const dateValue = event.target.value;
+    if (onSelect) {
+      if (dateValue) {
+        // The input value is in 'YYYY-MM-DD' format, which is interpreted as UTC.
+        // Creating a new Date from it will correctly represent the selected day.
+        onSelect(new Date(dateValue + 'T00:00:00'));
+      } else {
+        onSelect(undefined);
+      }
+    }
+  };
+  
   return (
-    <DayPicker
-      className={cn("p-3", className)}
-      {...props}
-    />
+      <input 
+        type="date"
+        value={formatDateForInput(selected)}
+        onChange={handleDateChange}
+        className={cn(
+          "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+          className
+        )}
+        {...props}
+      />
   )
 }
 Calendar.displayName = "Calendar"

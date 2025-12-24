@@ -29,12 +29,8 @@ import {
     SelectTrigger,
     SelectValue,
   } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import { cn } from '@/lib/utils';
-import { CalendarIcon } from 'lucide-react';
 import { Calendar } from '../ui/calendar';
 import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 import type { Contact } from '@/lib/types';
 import { serverTimestamp } from 'firebase/firestore';
 
@@ -54,6 +50,14 @@ interface ContactFormProps {
 }
 
 export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFormProps) {
+  const getInitialBirthday = () => {
+    if (!contact?.birthday) return undefined;
+    if (typeof contact.birthday === 'string') {
+      return new Date(contact.birthday + 'T00:00:00');
+    }
+    return undefined;
+  };
+  
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -61,25 +65,9 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
       name: contact?.name || '',
       phone: contact?.phone || '',
       segment: contact?.segment || 'New',
-      birthday: contact?.birthday ? new Date(contact.birthday) : undefined,
+      birthday: getInitialBirthday(),
     },
   });
-
-  React.useEffect(() => {
-    let birthdayDate: Date | undefined = undefined;
-    if (contact?.birthday) {
-        if (typeof contact.birthday === 'string') {
-            birthdayDate = new Date(contact.birthday);
-        }
-    }
-    form.reset({
-        id: contact?.id,
-        name: contact?.name || '',
-        phone: contact?.phone || '',
-        segment: contact?.segment || 'New',
-        birthday: birthdayDate,
-    });
-  }, [contact, form]);
 
   function onSubmit(values: z.infer<typeof formSchema>) {
     const birthdayString = values.birthday ? format(values.birthday, 'yyyy-MM-dd') : undefined;
@@ -166,37 +154,12 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
                   render={({ field }) => (
                     <FormItem className="flex flex-col">
                       <FormLabel>Data de Aniversário</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <FormControl>
-                            <Button
-                              variant={"outline"}
-                              className={cn(
-                                "w-full pl-3 text-left font-normal",
-                                !field.value && "text-muted-foreground"
-                              )}
-                            >
-                              {field.value ? (
-                                format(field.value, "PPP", { locale: ptBR })
-                              ) : (
-                                <span>Escolha uma data</span>
-                              )}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
-                          </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
+                       <FormControl>
+                          <Calendar 
                             selected={field.value}
                             onSelect={field.onChange}
-                            disabled={(date) =>
-                              date > new Date() || date < new Date("1900-01-01")
-                            }
-                            initialFocus
                           />
-                        </PopoverContent>
-                      </Popover>
+                        </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
