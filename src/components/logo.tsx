@@ -15,13 +15,13 @@ export function Logo() {
       <Image 
         src="https://files.catbox.moe/1isrb2.png"
         alt="TOPzap Logo"
-        width={175}
-        height={50}
+        width={210}
+        height={60}
         className={cn(
           'transition-opacity duration-200',
           state === 'collapsed' ? 'opacity-0 w-0' : 'opacity-100 w-auto'
         )}
-        style={{ width: 'auto', height: '50px' }}
+        style={{ width: 'auto', height: '60px' }}
         unoptimized
       />
     </Link>
