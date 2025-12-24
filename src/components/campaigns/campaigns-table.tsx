@@ -102,18 +102,17 @@ export const columns: ColumnDef<Campaign>[] = [
   ];
 
 export function CampaignsTable() {
-    const [data, setData] = React.useState<Campaign[]>(() => {
-        if (typeof window === 'undefined') {
-            return [...defaultData];
-        }
-        const storedCampaigns = localStorage.getItem('campaigns');
-        return storedCampaigns ? JSON.parse(storedCampaigns) : defaultData;
-    });
+    const [data, setData] = React.useState<Campaign[]>([...defaultData]);
     
     React.useEffect(() => {
-        if (typeof window !== 'undefined') {
-            localStorage.setItem('campaigns', JSON.stringify(data));
+        const storedCampaigns = localStorage.getItem('campaigns');
+        if (storedCampaigns) {
+            setData(JSON.parse(storedCampaigns));
         }
+    }, []);
+
+    React.useEffect(() => {
+        localStorage.setItem('campaigns', JSON.stringify(data));
     }, [data]);
 
     const [highlightedRow, setHighlightedRow] = React.useState<string | null>(null);

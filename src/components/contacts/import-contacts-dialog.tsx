@@ -9,14 +9,14 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useState, useMemo } from 'react';
-import { ArrowLeft, ArrowRight, UploadCloud, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, UploadCloud, CheckCircle } from 'lucide-react';
 import { Progress } from '../ui/progress';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Table, TableBody, TableCell, TableHeader, TableHead, TableRow } from '../ui/table';
 import { ScrollArea } from '../ui/scroll-area';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert';
-import { ShieldAlert } from 'lucide-react';
+import Papa from 'papaparse';
 
 type CsvData = { [key: string]: string }[];
 
@@ -87,77 +87,174 @@ export function ImportContactsDialog({
     }
     setFile(selectedFile);
     
-    // Immediately move to review as papaparse is removed
-    toast({
-        title: 'Funcionalidade Limitada',
-        description: 'A pré-visualização de CSV foi desativada. O arquivo será processado no backend.',
+    Papa.parse(selectedFile, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        setHeaders(results.meta.fields || []);
+        setCsvData(results.data as CsvData);
+        // Auto-detect columns
+        const lowerCaseHeaders = (results.meta.fields || []).map(h => h.toLowerCase());
+        const nameGuess = (results.meta.fields || [])[lowerCaseHeaders.indexOf('nome')] || (results.meta.fields || [])[lowerCaseHeaders.indexOf('name')] || '';
+        const phoneGuess = (results.meta.fields || [])[lowerCaseHeaders.indexOf('telefone')] || (results.meta.fields || [])[lowerCaseHeaders.indexOf('phone')] || '';
+        setNameColumn(nameGuess);
+        setPhoneColumn(phoneGuess);
+
+        setCurrentStep(STEPS.MAPPING);
+      },
+      error: (error) => {
+        toast({ variant: 'destructive', title: 'Erro ao processar arquivo', description: error.message });
+      }
     });
   };
 
-  const handleImportClick = () => {
-    if (!file) {
-        toast({ variant: 'destructive', title: 'Nenhum arquivo selecionado' });
-        return;
-    }
-    // Since we removed papaparse, we can't process the file on the client.
-    // In a real app, you would now upload the 'file' object to the server.
-    // For this demo, we'll simulate a successful import.
-    const dummyContacts = [
-        { name: 'Contato Importado 1', phone: '+5500999990001'},
-        { name: 'Contato Importado 2', phone: '+5500999990002'},
-    ];
-    onImport(dummyContacts);
-    handleClose(false);
-  }
+  const mappedData = useMemo(() => {
+    if (!nameColumn || !phoneColumn || csvData.length === 0) return [];
+    return csvData.map(row => ({
+      name: row[nameColumn],
+      phone: row[phoneColumn],
+    })).filter(contact => contact.name && contact.phone);
+  }, [csvData, nameColumn, phoneColumn]);
 
 
   const renderStep = () => {
-    return (
-        <>
-        <DialogHeader>
-            <DialogTitle>Importar Contatos</DialogTitle>
-            <DialogDescription>
-            Envie um arquivo CSV com seus contatos. O arquivo deve conter colunas para nome e telefone.
-            </DialogDescription>
-        </DialogHeader>
-        <Alert variant="destructive" className="mt-4">
-            <ShieldAlert className="h-4 w-4" />
-            <AlertTitle>Funcionalidade em Demonstração</AlertTitle>
-            <AlertDescription>
-                A importação de CSV foi simplificada. Por favor, selecione seu arquivo e clique em "Importar" para simular o processo.
-            </AlertDescription>
-        </Alert>
-        <div
-            className="mt-4 flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleFileDrop}
-        >
-            <UploadCloud className="h-12 w-12 text-muted-foreground" />
-            <p className="mt-4 text-center">
-            {file ? file.name : 'Arraste e solte o arquivo CSV aqui'}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">ou</p>
-            <Button asChild variant="link" className="p-0 h-auto">
-            <label htmlFor="csv-upload" className="cursor-pointer">
-                clique para selecionar um arquivo
-                <input type="file" id="csv-upload" className='hidden' accept=".csv" onChange={handleFileChange} />
-            </label>
-            </Button>
-        </div>
-        <DialogFooter className='mt-4'>
-            <Button onClick={() => onOpenChange(false)} variant="ghost">Cancelar</Button>
-            <Button onClick={handleImportClick} disabled={!file}>
-            Importar
-            </Button>
-        </DialogFooter>
-        </>
-    );
+    switch (currentStep) {
+      case STEPS.UPLOAD:
+        return (
+          <>
+            <DialogHeader>
+              <DialogTitle>Importar Contatos (Passo 1 de 3)</DialogTitle>
+              <DialogDescription>
+                Envie um arquivo CSV com seus contatos. O arquivo deve conter colunas para nome e telefone.
+              </DialogDescription>
+            </DialogHeader>
+            <div
+                className="mt-4 flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleFileDrop}
+            >
+                <UploadCloud className="h-12 w-12 text-muted-foreground" />
+                <p className="mt-4 text-center">
+                {file ? file.name : 'Arraste e solte o arquivo CSV aqui'}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">ou</p>
+                <Button asChild variant="link" className="p-0 h-auto">
+                <label htmlFor="csv-upload" className="cursor-pointer">
+                    clique para selecionar um arquivo
+                    <input type="file" id="csv-upload" className='hidden' accept=".csv" onChange={handleFileChange} />
+                </label>
+                </Button>
+            </div>
+          </>
+        );
+
+      case STEPS.MAPPING:
+        return (
+          <>
+            <DialogHeader>
+              <DialogTitle>Mapeamento (Passo 2 de 3)</DialogTitle>
+              <DialogDescription>
+                Combine as colunas do seu arquivo com os campos de contato.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <label>Coluna de Nome</label>
+                <Select value={nameColumn} onValueChange={setNameColumn}>
+                  <SelectTrigger><SelectValue placeholder="Selecione a coluna do nome" /></SelectTrigger>
+                  <SelectContent>
+                    {headers.map(h => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label>Coluna de Telefone</label>
+                <Select value={phoneColumn} onValueChange={setPhoneColumn}>
+                  <SelectTrigger><SelectValue placeholder="Selecione a coluna do telefone" /></SelectTrigger>
+                  <SelectContent>
+                    {headers.map(h => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+                <Button onClick={() => setCurrentStep(STEPS.UPLOAD)} variant="ghost"><ArrowLeft className="mr-2 h-4 w-4" />Voltar</Button>
+                <Button onClick={() => setCurrentStep(STEPS.REVIEW)} disabled={!nameColumn || !phoneColumn}>Revisar <ArrowRight className="ml-2 h-4 w-4" /></Button>
+            </DialogFooter>
+          </>
+        );
+
+        case STEPS.REVIEW:
+        const validContacts = mappedData.filter(c => c.name && c.phone);
+        const invalidCount = csvData.length - validContacts.length;
+
+        return (
+            <>
+            <DialogHeader>
+                <DialogTitle>Revisão (Passo 3 de 3)</DialogTitle>
+                <DialogDescription>
+                Confira os contatos a serem importados. Encontramos {validContacts.length} contatos válidos.
+                </DialogDescription>
+            </DialogHeader>
+            {invalidCount > 0 && (
+                <Alert variant="destructive">
+                    <AlertTitle>Contatos Inválidos</AlertTitle>
+                    <AlertDescription>{invalidCount} linhas foram ignoradas por não terem nome ou telefone.</AlertDescription>
+                </Alert>
+            )}
+            <ScrollArea className="h-60 mt-4 border rounded-md">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Nome</TableHead>
+                            <TableHead>Telefone</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {validContacts.slice(0, 100).map((contact, i) => (
+                            <TableRow key={i}>
+                                <TableCell>{contact.name}</TableCell>
+                                <TableCell>{contact.phone}</TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </ScrollArea>
+            <DialogFooter className="mt-4">
+                <Button onClick={() => setCurrentStep(STEPS.MAPPING)} variant="ghost"><ArrowLeft className="mr-2 h-4 w-4" />Voltar</Button>
+                <Button onClick={() => {
+                    onImport(validContacts);
+                    setCurrentStep(STEPS.DONE);
+                }} disabled={validContacts.length === 0}>
+                    Importar {validContacts.length} Contatos
+                </Button>
+            </DialogFooter>
+            </>
+        );
+        case STEPS.DONE:
+            return (
+              <>
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <CheckCircle className="h-16 w-16 text-green-500 mb-4" />
+                    <DialogTitle className="text-xl mb-2">Importação Concluída!</DialogTitle>
+                    <p className="text-muted-foreground">{mappedData.length} contatos foram adicionados à sua lista.</p>
+                </div>
+                <DialogFooter>
+                    <Button onClick={() => handleClose(false)} className="w-full">Fechar</Button>
+                </DialogFooter>
+              </>
+            );
+
+      default:
+        return null;
+    }
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-        <DialogContent className='sm:max-w-lg'>
+        <DialogContent className="sm:max-w-lg">
             <div className="p-2">
+                <Progress value={(currentStep / (Object.keys(STEPS).length -1)) * 100} className="mb-4" />
                 {renderStep()}
             </div>
         </DialogContent>
