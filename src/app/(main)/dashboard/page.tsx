@@ -98,18 +98,22 @@ export default function DashboardPage() {
       </PageHeader>
       
       <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-            <CardHeader>
-                <CardTitle className='flex items-center justify-between text-base'>
-                    <span>Envios Hoje</span>
-                    <MessageSquareText className="h-5 w-5 text-muted-foreground" />
-                </CardTitle>
-            </CardHeader>
-            <CardContent>
-                <p className="text-4xl font-bold">{dailyStats.sentToday}</p>
-                <p className='text-sm text-muted-foreground'>Mensagens nas últimas 24h</p>
-            </CardContent>
-        </Card>
+        <div className="relative rounded-lg bg-gradient-to-r from-blue-400 to-green-300 p-0.5">
+            <Card className='border-none'>
+                <div className="rounded-lg bg-card h-full">
+                    <CardHeader>
+                        <CardTitle className='flex items-center justify-between text-base'>
+                            <span>Envios Hoje</span>
+                            <MessageSquareText className="h-5 w-5 text-muted-foreground" />
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-4xl font-bold">{dailyStats.sentToday}</p>
+                        <p className='text-sm text-muted-foreground'>Mensagens nas últimas 24h</p>
+                    </CardContent>
+                </div>
+            </Card>
+        </div>
         <Card>
             <CardHeader>
                 <CardTitle className='flex items-center justify-between text-base'>
