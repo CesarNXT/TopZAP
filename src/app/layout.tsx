@@ -4,7 +4,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { cn } from '@/lib/utils';
 
 export const metadata: Metadata = {
-  title: 'WhatsConnect',
+  title: 'TOPzap',
   description: 'A platform to manage and optimize your WhatsApp campaigns.',
 };
 
