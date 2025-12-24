@@ -38,7 +38,6 @@ import { cn } from '@/lib/utils';
 import { contacts } from '@/lib/data';
 import { MessageComposer } from './message-composer';
 import { SpeedSelector } from './speed-selector';
-import { RocketLaunch } from './rocket-launch';
 
 
 const formSchema = z.object({
@@ -66,7 +65,7 @@ export function CreateCampaignWizard() {
     const [currentStep, setCurrentStep] = useState(0);
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
-    const [showSuccess, setShowSuccess] = useState(false);
+    const [submitError, setSubmitError] = useState(false);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -79,7 +78,7 @@ export function CreateCampaignWizard() {
         },
     });
 
-    const { watch, setValue, trigger, reset } = form;
+    const { watch, setValue, trigger, reset, handleSubmit, formState: { errors } } = form;
     const messageValue = watch('message');
     const mediaFile = watch('media');
     const sendSpeed = watch('sendSpeed');
@@ -95,19 +94,31 @@ export function CreateCampaignWizard() {
         if (currentStep > 0) setCurrentStep(step => step - 1);
     }
 
-    async function onSubmit(values: z.infer<typeof formSchema>) {
-        setShowSuccess(true);
-        setTimeout(() => {
-            toast({
-                title: "Campanha Enviada para a Fila!",
-                description: `A campanha "${values.name}" foi iniciada com sucesso.`
-            });
-            reset();
-            setCurrentStep(0);
-        }, 800);
-        setTimeout(() => setShowSuccess(false), 5000);
+    const processSubmit = (values: z.infer<typeof formSchema>) => {
+        toast({
+            title: "Campanha Enviada para a Fila!",
+            description: `A campanha "${values.name}" foi iniciada com sucesso.`
+        });
         console.log(values);
+        reset();
+        setCurrentStep(0);
     }
+
+    const handleFinalSubmit = () => {
+        if (!watch('liabilityAccepted')) {
+            trigger('liabilityAccepted');
+            setSubmitError(true);
+            setTimeout(() => setSubmitError(false), 500); // Animation duration
+            toast({
+                variant: 'destructive',
+                title: 'Ação Necessária',
+                description: 'Por favor, aceite os termos de responsabilidade para continuar.',
+            });
+        } else {
+            handleSubmit(processSubmit)();
+        }
+    };
+
 
     const onOptimize = async () => {
         const message = form.getValues('message');
@@ -145,7 +156,6 @@ export function CreateCampaignWizard() {
 
   return (
     <>
-    {showSuccess && <RocketLaunch />}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2">
             <nav aria-label="Progress" className="mb-8">
@@ -174,7 +184,7 @@ export function CreateCampaignWizard() {
             </nav>
 
             <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <form onSubmit={(e) => e.preventDefault()} className="space-y-8">
                 
                 {/* Step 1: Recipients */}
                 <div className={cn(currentStep !== 0 && "hidden")}>
@@ -266,7 +276,7 @@ export function CreateCampaignWizard() {
                             )}
 
                              <FormField control={form.control} name="liabilityAccepted" render={({ field }) => (
-                                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 bg-background">
+                                <FormItem className={cn("flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 bg-background transition-colors", errors.liabilityAccepted && "border-destructive ring-2 ring-destructive/50")}>
                                     <FormControl>
                                         <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                                     </FormControl>
@@ -289,7 +299,12 @@ export function CreateCampaignWizard() {
                     {currentStep < steps.length - 1 ? (
                         <Button type="button" onClick={next}>Próximo</Button>
                     ) : (
-                        <Button type="submit" disabled={!form.watch('liabilityAccepted')} size="lg">
+                        <Button 
+                            type="button" 
+                            onClick={handleFinalSubmit} 
+                            size="lg"
+                            className={cn(submitError && "animate-shake")}
+                        >
                             <Send className="mr-2 h-4 w-4" /> Iniciar Disparo Agora
                         </Button>
                     )}
