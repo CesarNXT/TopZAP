@@ -50,6 +50,7 @@ export const columns: ColumnDef<Campaign>[] = [
           <Badge
             variant={status === 'Sent' ? 'default' : status === 'Scheduled' ? 'secondary' : 'destructive'}
             className={cn(
+              'font-semibold',
               status === 'Sent' && 'bg-primary/20 text-primary-foreground border-transparent hover:bg-primary/30 dark:text-primary',
               status === 'Scheduled' && 'bg-blue-500/20 text-blue-700 border-transparent hover:bg-blue-500/30 dark:text-blue-400',
               status === 'Draft' && 'bg-gray-500/20 text-gray-700 border-transparent hover:bg-gray-500/30 dark:text-gray-400',
@@ -102,7 +103,7 @@ export const columns: ColumnDef<Campaign>[] = [
   ];
 
 export function CampaignsTable() {
-    const [data, setData] = React.useState<Campaign[]>(defaultData);
+    const [data, setData] = React.useState<Campaign[]>([]);
     const [highlightedRow, setHighlightedRow] = React.useState<string | null>(null);
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -115,8 +116,9 @@ export function CampaignsTable() {
             if (storedCampaigns) {
                 setData(JSON.parse(storedCampaigns));
             } else {
-                setData([...defaultData]);
-                localStorage.setItem('campaigns', JSON.stringify(defaultData));
+                const initialData = [...defaultData];
+                localStorage.setItem('campaigns', JSON.stringify(initialData));
+                setData(initialData);
             }
 
             const newId = sessionStorage.getItem('newlyCreatedCampaignId');
@@ -135,16 +137,6 @@ export function CampaignsTable() {
             setData([...defaultData]);
         }
     }, []);
-
-    React.useEffect(() => {
-        if (isMounted) {
-            try {
-                localStorage.setItem('campaigns', JSON.stringify(data));
-            } catch (error) {
-                console.error("Failed to save campaigns to localStorage", error);
-            }
-        }
-    }, [data, isMounted]);
 
     const table = useReactTable({
       data,

@@ -111,8 +111,8 @@ export default function DashboardPage() {
     const dailyStats = {
         sentToday: allCampaigns.filter(c => c.status === 'Sent' && isToday(parseISO(c.sentDate))).length,
         inQueue: allCampaigns.filter(c => c.status === 'Scheduled').length,
-        errorRate: allCampaigns.filter(c => c.status === 'Failed' && isToday(parseISO(c.sentDate))).length > 0 ? 
-            (allCampaigns.filter(c => c.status === 'Failed' && isToday(parseISO(c.sentDate))).length / allCampaigns.filter(c => isToday(parseISO(c.sentDate))).length) * 100 
+        errorRate: allCampaigns.filter(c => isToday(parseISO(c.sentDate)) && c.status !== 'Sent').length > 0 ?
+            (allCampaigns.filter(c => isToday(parseISO(c.sentDate)) && c.status !== 'Sent').length / allCampaigns.filter(c => isToday(parseISO(c.sentDate))).length) * 100
             : 0,
         dailyLimit: 300,
     };
@@ -158,7 +158,7 @@ export default function DashboardPage() {
         </Button>
         <Button size="lg" variant="secondary" className="h-20 text-lg" asChild>
             <Link href="/campaigns">
-                <MessageSquareQuote className="mr-4 h-8 w-8" /> Ver Quem Respondeu
+                <MessageSquareQuote className="mr-4 h-8 w-8" /> Ver Campanhas
             </Link>
         </Button>
       </div>
@@ -216,8 +216,8 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6">
-        <div className="space-y-6">
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
             <Card>
                 <CardHeader>
                     <CardTitle>Desempenho da Semana</CardTitle>
@@ -235,38 +235,37 @@ export default function DashboardPage() {
                     </ResponsiveContainer>
                 </CardContent>
             </Card>
-
-            <Card>
-                 <CardHeader>
-                    <CardTitle>Últimos Envios</CardTitle>
-                    <CardDescription>Mini-histórico das últimas 5 mensagens processadas.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="space-y-4">
-                        {lastSentMessages.map(msg => (
-                             <div key={msg.id} className="flex items-center justify-between">
-                                <div className='space-y-1'>
-                                    <p className="font-medium">{msg.to}</p>
-                                    <p className="text-sm text-muted-foreground">{msg.campaign}</p>
-                                </div>
-                                <Badge variant={
-                                    msg.status === 'Sent' ? 'default' : 
-                                    msg.status === 'Failed' ? 'destructive' : 'secondary'
-                                }
-                                className={
-                                    msg.status === 'Sent' ? 'bg-primary/20 text-primary-foreground dark:text-primary' :
-                                    msg.status === 'Waiting' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' : ''
-                                }
-                                >{msg.status}</Badge>
+        </div>
+        <div className="lg:col-span-1">
+          <Card>
+              <CardHeader>
+                <CardTitle>Últimos Envios</CardTitle>
+                <CardDescription>Mini-histórico das últimas 5 mensagens processadas.</CardDescription>
+            </CardHeader>
+            <CardContent>
+                <div className="space-y-4">
+                    {lastSentMessages.map(msg => (
+                          <div key={msg.id} className="flex items-center justify-between">
+                            <div className='space-y-1'>
+                                <p className="font-medium">{msg.to}</p>
+                                <p className="text-sm text-muted-foreground">{msg.campaign}</p>
                             </div>
-                        ))}
-                    </div>
-                </CardContent>
-            </Card>
+                            <Badge variant={
+                                msg.status === 'Sent' ? 'default' : 
+                                msg.status === 'Failed' ? 'destructive' : 'secondary'
+                            }
+                            className={
+                                msg.status === 'Sent' ? 'bg-primary/20 text-primary-foreground dark:text-primary' :
+                                msg.status === 'Waiting' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' : ''
+                            }
+                            >{msg.status}</Badge>
+                        </div>
+                    ))}
+                </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
   );
 }
-
-    

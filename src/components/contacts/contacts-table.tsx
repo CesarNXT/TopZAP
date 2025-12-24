@@ -27,7 +27,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, Ban, Users, Crown, FilterX } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, UserPlus, FileUp } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 
@@ -169,11 +169,11 @@ export function ContactsTable({ data, setData, onEditRequest, filter, setFilter 
                 className="max-w-sm"
             />
             <div className="flex items-center gap-2">
-                <Button variant={filter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('all')}><Users className='mr-2 h-4 w-4'/>Todos</Button>
-                <Button variant={filter === 'vip' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('vip')}><Crown className='mr-2 h-4 w-4'/>Só VIPs</Button>
-                <Button variant={filter === 'blocked' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('blocked')}><Ban className='mr-2 h-4 w-4'/>Só Bloqueados</Button>
+                <Button variant={filter === 'all' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('all')}><Users className='mr-2 h-4 w-4'/>Todos</Button>
+                <Button variant={filter === 'vip' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('vip')}><Crown className='mr-2 h-4 w-4'/>Só VIPs</Button>
+                <Button variant={filter === 'blocked' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('blocked')}><Ban className='mr-2 h-4 w-4'/>Só Bloqueados</Button>
                 {filter !== 'all' && (
-                     <Button variant="ghost" size="sm" onClick={() => setFilter('all')}><FilterX className='mr-2 h-4 w-4' />Limpar Filtro</Button>
+                     <Button variant="ghost" size="sm" onClick={() => setFilter('all')}><FilterX className='mr-2 h-4 w-4' />Limpar</Button>
                 )}
             </div>
         </div>

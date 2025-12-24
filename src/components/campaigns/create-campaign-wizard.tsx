@@ -173,8 +173,8 @@ export function CreateCampaignWizard() {
     const recipientCount = useMemo(() => {
         const activeContacts = contacts.filter(c => c.segment !== 'Inactive');
         switch (contactSegment) {
-            case 'common':
-                return activeContacts.filter(c => c.segment !== 'VIP').length;
+            case 'all':
+                return activeContacts.length;
             case 'vip':
                 return activeContacts.filter(c => c.segment === 'VIP').length;
             case 'birthday':
@@ -240,9 +240,9 @@ export function CreateCampaignWizard() {
                                     <FormLabel>Grupo de Destinatários</FormLabel>
                                     <FormControl>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                                            <Label onClick={() => setValue('contactSegment', 'common', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'common' && 'border-primary ring-2 ring-primary')}>
+                                            <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary')}>
                                                 <Users className="w-8 h-8"/>
-                                                <span className="font-bold text-center">Clientes Comuns</span>
+                                                <span className="font-bold text-center">Todos os Contatos</span>
                                             </Label>
                                             <Label onClick={() => setValue('contactSegment', 'vip', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-yellow-500 transition-all h-32", field.value === 'vip' && 'border-yellow-500 ring-2 ring-yellow-500 text-yellow-600')}>
                                                 <Star className="w-8 h-8"/>
