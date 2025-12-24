@@ -15,7 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import {
-  Loader2, Sparkles, AlertTriangle, MessageSquare, Users, Star, Cake, ShieldX, Globe, ArrowLeft, Send
+  Loader2, Sparkles, AlertTriangle, Users, Star, Cake, ShieldX, ArrowLeft, Send
 } from 'lucide-react';
 import { useState, useMemo, useEffect } from 'react';
 import { handleOptimizeMessage } from '@/app/actions';
@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils';
 import { contacts } from '@/lib/data';
 import { MessageComposer } from './message-composer';
 import { SpeedSelector } from './speed-selector';
+import { RocketLaunch } from './rocket-launch';
 
 
 const formSchema = z.object({
@@ -65,6 +66,7 @@ export function CreateCampaignWizard() {
     const [currentStep, setCurrentStep] = useState(0);
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
+    const [showLaunch, setShowLaunch] = useState(false);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -77,7 +79,7 @@ export function CreateCampaignWizard() {
         },
     });
 
-    const { watch, setValue, trigger } = form;
+    const { watch, setValue, trigger, reset } = form;
     const messageValue = watch('message');
     const mediaFile = watch('media');
     const sendSpeed = watch('sendSpeed');
@@ -94,10 +96,16 @@ export function CreateCampaignWizard() {
     }
 
     async function onSubmit(values: z.infer<typeof formSchema>) {
-        toast({
-            title: "Campanha Enviada para a Fila!",
-            description: `A campanha "${values.name}" foi iniciada com sucesso.`
-        })
+        setShowLaunch(true);
+        setTimeout(() => {
+            toast({
+                title: "Campanha Enviada para a Fila!",
+                description: `A campanha "${values.name}" foi iniciada com sucesso.`
+            });
+            reset();
+            setCurrentStep(0);
+        }, 800);
+        setTimeout(() => setShowLaunch(false), 3000);
         console.log(values);
     }
 
@@ -137,6 +145,7 @@ export function CreateCampaignWizard() {
 
   return (
     <>
+    {showLaunch && <RocketLaunch />}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2">
             <nav aria-label="Progress" className="mb-8">
