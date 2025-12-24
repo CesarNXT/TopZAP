@@ -14,6 +14,7 @@ import { Carousel, CarouselContent, CarouselItem, type CarouselApi } from '@/com
 import { ArrowLeft, ArrowRight, User, Smartphone, ShieldCheck, Rocket } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
+import { useTutorial } from './tutorial-provider';
 
 const tourSteps = [
   {
@@ -50,15 +51,11 @@ const tourSteps = [
   },
 ];
 
-interface WelcomeTourProps {
-    isOpen: boolean;
-    onComplete: () => void;
-}
-
-export function WelcomeTour({ isOpen, onComplete }: WelcomeTourProps) {
+export function WelcomeTour() {
   const [api, setApi] = useState<CarouselApi>();
   const [current, setCurrent] = useState(0);
   const router = useRouter();
+  const { isTourOpen, completeTutorial } = useTutorial();
 
   useEffect(() => {
     if (!api) return;
@@ -80,19 +77,19 @@ export function WelcomeTour({ isOpen, onComplete }: WelcomeTourProps) {
     if (step?.href) {
       router.push(step.href);
     }
-    onComplete();
+    completeTutorial();
   };
 
   const handleSkip = () => {
-    onComplete();
+    completeTutorial();
   };
 
-  if (!isOpen) {
+  if (!isTourOpen) {
     return null;
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onComplete()}>
+    <Dialog open={isTourOpen} onOpenChange={(open) => !open && completeTutorial()}>
       <DialogContent className="max-w-md p-0">
         <DialogHeader className="p-6 pb-0">
           <DialogTitle className="text-2xl text-center">Bem-vindo ao TOPzap!</DialogTitle>

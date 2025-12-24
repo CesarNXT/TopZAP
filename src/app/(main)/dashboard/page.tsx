@@ -32,7 +32,7 @@ import { ptBR } from 'date-fns/locale';
 import { useUser, useCollection, useFirestore } from '@/firebase';
 import { useMemoFirebase } from '@/firebase/provider';
 import { collection, query, orderBy, limit } from 'firebase/firestore';
-import { WelcomeTour } from '@/components/welcome-tour';
+import { useTutorial } from '@/components/tutorial-provider';
 
 
 const Greeting = () => {
@@ -61,33 +61,21 @@ const LOCAL_STORAGE_KEY = 'welcomeTourCompleted';
 export default function DashboardPage() {
     const { user } = useUser();
     const firestore = useFirestore();
-    const [showTour, setShowTour] = useState(false);
+    const { startTutorial } = useTutorial();
 
     useEffect(() => {
-        // Forçando a exibição do tutorial para revisão do usuário.
-        // A lógica original está comentada abaixo.
-        setShowTour(true);
-        
-        // if (typeof window !== 'undefined') {
-        //     try {
-        //         const tourCompleted = localStorage.getItem(LOCAL_STORAGE_KEY);
-        //         if (!tourCompleted) {
-        //             setShowTour(true);
-        //         }
-        //     } catch (error) {
-        //         console.warn("Could not access localStorage. Welcome tour will not be shown.", error);
-        //     }
-        // }
-    }, []);
-
-    const handleTourComplete = () => {
-        try {
-            localStorage.setItem(LOCAL_STORAGE_KEY, 'true');
-        } catch (error) => {
-            console.warn("Could not access localStorage to save tour state.", error);
+        if (typeof window !== 'undefined') {
+            try {
+                const tourCompleted = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (!tourCompleted) {
+                    startTutorial();
+                }
+            } catch (error) {
+                console.warn("Could not access localStorage. Welcome tour will not be shown automatically.", error);
+            }
         }
-        setShowTour(false);
-    };
+    }, [startTutorial]);
+
 
     const campaignsQuery = useMemoFirebase(() => {
         if (!user) return null;
@@ -129,7 +117,6 @@ export default function DashboardPage() {
 
   return (
     <div className="container relative">
-      <WelcomeTour isOpen={showTour} onComplete={handleTourComplete} />
       <PageHeader className='pb-4'>
             <Greeting />
       </PageHeader>
