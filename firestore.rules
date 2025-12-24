@@ -1,0 +1,186 @@
+/**
+ * This ruleset enforces a strict user-ownership model for the WhatsConnect application.
+ * All user-generated data is stored within a private data tree, ensuring that users can
+ * only access and manage their own information.
+ *
+ * Core Philosophy:
+ * The security model is built on the principle of data isolation. Each user's data,
+ * including their profile, contacts, and campaigns, is segregated into a unique
+ * document tree identified by their user ID. Access is granted only if the
+ * authenticated user's ID matches the ID in the document path.
+ *
+ * Data Structure:
+ * All data is nested hierarchically under the `/users/{userId}` path. For example, a user's
+ * contacts are stored at `/users/{userId}/contacts/{contactId}`. This structure
+ * inherently links data to its owner, simplifying security rules.
+ *
+ * Key Security Decisions:
+ * - Default Deny: All operations are denied by default.
+ * - User Isolation: Users are strictly prohibited from reading or writing data
+ *   belonging to other users. Listing the top-level `/users` collection is disallowed.
+ * - Path-Based Authorization: Ownership is determined by the `{userId}` wildcard in the
+ *   document path, which is fast, secure, and avoids costly database lookups (`get()` calls).
+ * - Relational Integrity: On document creation, key identifiers (like `userId` within
+ *   a contact document) are validated against the path to ensure data consistency. These
+ *   identifiers are then enforced as immutable on updates.
+ *
+ * Denormalization for Authorization:
+ * This ruleset leverages a path-based ownership model, which is a form of structural
+ * denormalization. By placing all of a user's data under `/users/{userId}`, the
+ * ownership context is always present in the path itself. This avoids the need to
+ * denormalize an `ownerId` field onto every single sub-document solely for security
+ * purposes, as the rule `request.auth.uid == userId` is sufficient and highly performant.
+ *
+ * Structural Segregation:
+ * The data model perfectly implements structural segregation by design. All user-specific,
+ * private data resides under the `/users/{userId}` tree. There are no public collections
+ * or mixed-access collections, which simplifies query security and prevents accidental
+ * data leakage.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --------------------------------------------------------------------------------
+    // Helper Functions
+    // --------------------------------------------------------------------------------
+
+    /**
+     * Verifies that a user is signed in.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * Verifies if the requesting user is the owner of the document based on the path.
+     */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    /**
+     * Verifies ownership for an existing document. Used for update and delete.
+     * Prevents modifying or deleting documents that do not exist.
+     */
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+    
+    /**
+     * On create, validates the incoming document's 'id' field matches the user's UID.
+     * Enforces that a user document correctly identifies itself.
+     */
+    function isCreatingSelf(userId) {
+      return request.resource.data.id == userId;
+    }
+
+    /**
+     * On update, ensures the document's 'id' field cannot be changed.
+     * Protects the primary link between the user document and the auth UID.
+     */
+    function isOwnerIdImmutable() {
+      return request.resource.data.id == resource.data.id;
+    }
+
+    /**
+     * On create, validates that a subcollection document's 'userId' field
+     * correctly references the owner specified in the path.
+     */
+    function isRelationalUserIdCorrect(userId) {
+      return request.resource.data.userId == userId;
+    }
+
+    /**
+     * On update, ensures that a subcollection document's 'userId' field is immutable,
+     * preventing the document from being "moved" to another user.
+     */
+    function isRelationalUserIdImmutable() {
+      return request.resource.data.userId == resource.data.userId;
+    }
+
+    // --------------------------------------------------------------------------------
+    // Collection Rules
+    // --------------------------------------------------------------------------------
+
+    /**
+     * @description Manages user profile data.
+     * @path /users/{userId}
+     * @allow (create) A new user signing up for the first time: auth.uid='user_abc' creating /users/user_abc.
+     * @deny (list) An authenticated user trying to list all other users in the system.
+     * @deny (update) User 'user_abc' trying to update the profile of 'user_xyz'.
+     * @principle Restricts access to a user's own data tree and allows self-creation of a profile.
+     */
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && isCreatingSelf(userId);
+      allow update: if isExistingOwner(userId) && isOwnerIdImmutable();
+      allow delete: if isExistingOwner(userId);
+
+      /**
+       * @description Manages a user's private list of contacts.
+       * @path /users/{userId}/contacts/{contactId}
+       * @allow (create) User 'user_abc' adding a new contact to their own list.
+       * @allow (list) User 'user_abc' listing all of their own contacts.
+       * @deny (get) User 'user_xyz' trying to read a contact belonging to 'user_abc'.
+       * @principle Enforces strict data ownership within a user's private subcollection.
+       */
+      match /contacts/{contactId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isRelationalUserIdCorrect(userId);
+        allow update: if isExistingOwner(userId) && isRelationalUserIdImmutable();
+        allow delete: if isExistingOwner(userId);
+      }
+
+      /**
+       * @description Manages a user's private marketing campaigns.
+       * @path /users/{userId}/campaigns/{campaignId}
+       * @allow (create) User 'user_abc' creating a new campaign for themself.
+       * @allow (list) User 'user_abc' listing all of their own campaigns.
+       * @deny (delete) User 'user_xyz' trying to delete a campaign belonging to 'user_abc'.
+       * @principle Enforces strict data ownership within a user's private subcollection.
+       */
+      match /campaigns/{campaignId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isRelationalUserIdCorrect(userId);
+        allow update: if isExistingOwner(userId) && isRelationalUserIdImmutable();
+        allow delete: if isExistingOwner(userId);
+
+        /**
+         * @description Manages the association between a campaign and a contact.
+         * @path /users/{userId}/campaigns/{campaignId}/campaignContacts/{campaignContactId}
+         * @allow (create) User 'user_abc' adding a contact to their own campaign.
+         * @allow (list) User 'user_abc' listing the contacts for their own campaign.
+         * @deny (update) User 'user_xyz' trying to change the status of a campaign contact for user 'user_abc'.
+         * @principle Inherits ownership from the parent path, restricting access to the user.
+         */
+        match /campaignContacts/{campaignContactId} {
+          allow get: if isOwner(userId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId);
+          allow update: if isExistingOwner(userId);
+          allow delete: if isExistingOwner(userId);
+        }
+
+        /**
+         * @description Manages AI-generated suggestions for a campaign message.
+         * @path /users/{userId}/campaigns/{campaignId}/aiSuggestions/{aiSuggestionId}
+         * @allow (create) User 'user_abc' generating an AI suggestion for their own campaign.
+         * @allow (get) User 'user_abc' reading a suggestion for their own campaign.
+         * @deny (list) User 'user_xyz' trying to list suggestions from another user's campaign.
+         * @principle Inherits ownership from the parent path, restricting access to the user.
+         */
+        match /aiSuggestions/{aiSuggestionId} {
+          allow get: if isOwner(userId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId);
+          allow update: if isExistingOwner(userId);
+          allow delete: if isExistingOwner(userId);
+        }
+      }
+    }
+  }
+}

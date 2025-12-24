@@ -1,0 +1,283 @@
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the WhatsConnect application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the user entity."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the user.",
+          "format": "email"
+        },
+        "name": {
+          "type": "string",
+          "description": "The name of the user."
+        }
+      },
+      "required": [
+        "id",
+        "email"
+      ]
+    },
+    "Contact": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Contact",
+      "type": "object",
+      "description": "Represents a contact in the WhatsConnect application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the contact entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Contact)"
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Phone number of the contact."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the contact."
+        },
+        "attributes": {
+          "type": "string",
+          "description": "Optional JSON containing additional attributes of the contact."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "phoneNumber"
+      ]
+    },
+    "Campaign": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Campaign",
+      "type": "object",
+      "description": "Represents a WhatsApp campaign in the WhatsConnect application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the campaign entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Campaign)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the campaign."
+        },
+        "message": {
+          "type": "string",
+          "description": "Message content of the campaign."
+        },
+        "scheduledAt": {
+          "type": "string",
+          "description": "Scheduled date and time for the campaign.",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status of the campaign (e.g., scheduled, running, completed)."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "name",
+        "message"
+      ]
+    },
+    "CampaignContact": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CampaignContact",
+      "type": "object",
+      "description": "Represents the association between a campaign and a contact.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the campaign contact entity."
+        },
+        "campaignId": {
+          "type": "string",
+          "description": "Reference to Campaign. (Relationship: Campaign 1:N CampaignContact)"
+        },
+        "contactId": {
+          "type": "string",
+          "description": "Reference to Contact. (Relationship: Contact 1:N CampaignContact)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status of the message delivery to the contact (e.g., sent, delivered, failed)."
+        }
+      },
+      "required": [
+        "id",
+        "campaignId",
+        "contactId"
+      ]
+    },
+    "AiSuggestion": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "AiSuggestion",
+      "type": "object",
+      "description": "Represents an AI-generated suggestion for improving a campaign message.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the AI suggestion entity."
+        },
+        "campaignId": {
+          "type": "string",
+          "description": "Reference to Campaign. (Relationship: Campaign 1:N AiSuggestion)"
+        },
+        "originalMessage": {
+          "type": "string",
+          "description": "The original campaign message."
+        },
+        "suggestedMessage": {
+          "type": "string",
+          "description": "The AI-generated suggested message."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "The AI's reasoning for suggesting the improvement."
+        },
+        "isAccepted": {
+          "type": "boolean",
+          "description": "Indicates whether the user accepted the AI suggestion."
+        }
+      },
+      "required": [
+        "id",
+        "campaignId",
+        "originalMessage",
+        "suggestedMessage"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "Stores user profile information.  Accessible only to the authenticated user.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/contacts/{contactId}",
+        "definition": {
+          "entityName": "Contact",
+          "schema": {
+            "$ref": "#/backend/entities/Contact"
+          },
+          "description": "Stores contact information for a specific user. Accessible only to the authenticated user.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            },
+            {
+              "name": "contactId",
+              "description": "The unique identifier of the contact."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/campaigns/{campaignId}",
+        "definition": {
+          "entityName": "Campaign",
+          "schema": {
+            "$ref": "#/backend/entities/Campaign"
+          },
+          "description": "Stores campaign information for a specific user. Accessible only to the authenticated user.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            },
+            {
+              "name": "campaignId",
+              "description": "The unique identifier of the campaign."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/campaigns/{campaignId}/campaignContacts/{campaignContactId}",
+        "definition": {
+          "entityName": "CampaignContact",
+          "schema": {
+            "$ref": "#/backend/entities/CampaignContact"
+          },
+          "description": "Stores the association between a campaign and a contact. Accessible only to the authenticated user.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            },
+            {
+              "name": "campaignId",
+              "description": "The unique identifier of the campaign."
+            },
+            {
+              "name": "campaignContactId",
+              "description": "The unique identifier of the campaign contact."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/campaigns/{campaignId}/aiSuggestions/{aiSuggestionId}",
+        "definition": {
+          "entityName": "AiSuggestion",
+          "schema": {
+            "$ref": "#/backend/entities/AiSuggestion"
+          },
+          "description": "Stores AI-generated suggestions for a specific campaign. Accessible only to the authenticated user.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            },
+            {
+              "name": "campaignId",
+              "description": "The unique identifier of the campaign."
+            },
+            {
+              "name": "aiSuggestionId",
+              "description": "The unique identifier of the AI suggestion."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore data structure is designed to support the WhatsConnect application, focusing on secure data access and scalability. Key considerations include user authentication, contact management, campaign creation, and AI-driven message optimization. The structure emphasizes authorization independence by avoiding hierarchical authorization dependencies (`get()` calls in security rules) and promotes clarity of intent for easier debugging.  \n\nUser data is stored under `/users/{userId}` for private data accessible only to the user. Contacts, campaigns, and AI suggestions are organized as subcollections under the user document to establish clear ownership.  CampaignContacts are located as a subcollection of campaigns.\n\nThis structure facilitates QAPs (Rules are not Filters) by segregating data based on ownership, enabling secure `list` operations. Path-based ownership (`/users/{userId}/...`) ensures only the authenticated user can access their respective data. The design avoids mixing data with different access needs within the same collection, adhering to the Structural Segregation principle.  Finally, denormalization is not explicitly needed as the path-based ownership model intrinsically provides the authorization context without requiring data duplication, simplifying the schema and reducing maintenance overhead."
+  }
+}
