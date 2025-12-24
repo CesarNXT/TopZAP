@@ -9,18 +9,12 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
-  CheckCircle2,
   Clock,
   MessageSquareText,
-  PlusCircle,
   TrendingUp,
   TriangleAlert,
   XCircle,
-  Power,
-  ServerCrash,
-  MessageSquareQuote
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -32,7 +26,6 @@ import {
 } from 'recharts';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import Link from 'next/link';
 import type { Campaign } from '@/lib/types';
 import { campaigns as defaultCampaigns } from '@/lib/data';
 import { subDays, format, isToday, parseISO } from 'date-fns';
@@ -43,50 +36,6 @@ const Greeting = () => {
     const userName = "Usuário";
     return <PageHeaderHeading>Olá, {userName}.</PageHeaderHeading>;
 }
-
-const ConnectionStatus = () => {
-    const status = 'disconnected'; 
-
-    const statusConfig = {
-        connected: {
-            icon: <CheckCircle2 className="h-10 w-10 text-green-500" />,
-            title: 'Online e pronto para envio',
-            description: 'A conexão com o WhatsApp está ativa e operando normalmente.',
-            button: null,
-            cardClass: 'bg-green-500/10 border-green-500/50'
-        },
-        disconnected: {
-            icon: <ServerCrash className="h-10 w-10 text-destructive" />,
-            title: 'Conexão perdida',
-            description: 'Não foi possível conectar ao WhatsApp. Suas campanhas estão pausadas.',
-            button: <Button asChild><Link href="/whatsapp-connect"><Power className="mr-2" /> Conectar Agora</Link></Button>,
-            cardClass: 'bg-destructive/10 border-destructive/50'
-        },
-        waiting: {
-            icon: <Clock className="h-10 w-10 text-yellow-500 animate-spin" />,
-            title: 'Aguardando conexão...',
-            description: 'Tentando restabelecer a conexão com o WhatsApp. Por favor, aguarde.',
-            button: null,
-            cardClass: 'bg-yellow-500/10 border-yellow-500/50'
-        }
-    }
-
-    const currentStatus = statusConfig[status];
-
-  return (
-    <Card className={currentStatus.cardClass}>
-      <CardHeader className="flex flex-row items-center gap-4 space-y-0">
-        {currentStatus.icon}
-        <div className='flex-1'>
-          <CardTitle>{currentStatus.title}</CardTitle>
-          <CardDescription>{currentStatus.description}</CardDescription>
-        </div>
-        {currentStatus.button}
-      </CardHeader>
-    </Card>
-  );
-};
-
 
 export default function DashboardPage() {
     const [isMounted, setIsMounted] = useState(false);
@@ -148,22 +97,6 @@ export default function DashboardPage() {
             <Greeting />
       </PageHeader>
       
-      <ConnectionStatus />
-
-      <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
-        <Button size="lg" className="h-20 text-lg" asChild>
-            <Link href="/campaigns/new">
-                <PlusCircle className="mr-4 h-8 w-8" /> Enviar Nova Mensagem
-            </Link>
-        </Button>
-        <Button size="lg" variant="secondary" className="h-20 text-lg" asChild>
-            <Link href="/campaigns">
-                <MessageSquareQuote className="mr-4 h-8 w-8" /> Ver Campanhas
-            </Link>
-        </Button>
-      </div>
-
-
       <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
         <Card>
             <CardHeader>
