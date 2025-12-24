@@ -4,37 +4,37 @@ import React from 'react';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription, PageHeaderActions } from '@/components/page-header';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { Button } from '@/components/ui/button';
-import { PlusCircle, Upload } from 'lucide-react';
+import { PlusCircle } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { PlaceHolderImages } from '@/lib/placeholder-images';
 import { contacts as defaultData } from '@/lib/data';
-import { ImportContactsDialog } from '@/components/contacts/import-contacts-dialog';
 
 export default function ContactsPage() {
   const { toast } = useToast();
   const [data, setData] = React.useState<Contact[]>([]);
   const [isFormOpen, setIsFormOpen] = React.useState(false);
-  const [isImportOpen, setIsImportOpen] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
   const [isMounted, setIsMounted] = React.useState(false);
 
   React.useEffect(() => {
+    setIsMounted(true);
+    let storedData: Contact[] = [];
     try {
       const storedContacts = localStorage.getItem('contacts');
       if (storedContacts) {
-        setData(JSON.parse(storedContacts));
+        storedData = JSON.parse(storedContacts);
       } else {
-        setData([...defaultData]);
+        storedData = [...defaultData];
       }
     } catch (error) {
         console.error("Failed to parse contacts from localStorage", error);
-        setData([...defaultData]);
+        storedData = [...defaultData];
     }
-    setIsMounted(true);
+    setData(storedData);
   }, []);
 
   React.useEffect(() => {
@@ -63,22 +63,6 @@ export default function ContactsPage() {
     setIsFormOpen(false);
   };
 
-  const handleImportContacts = (newContacts: Omit<Contact, 'avatarUrl' | 'createdAt' | 'id'>[]) => {
-    const contactsWithIds = newContacts.map(contact => ({
-        ...contact,
-        id: uuidv4(),
-        createdAt: new Date().toISOString(),
-        avatarUrl: PlaceHolderImages[Math.floor(Math.random() * PlaceHolderImages.length)].imageUrl,
-        segment: 'New' as const,
-    }));
-    setData(prev => [...contactsWithIds, ...prev]);
-    toast({
-        title: `${contactsWithIds.length} contatos importados!`,
-        description: "Os novos contatos foram adicionados à sua lista.",
-    });
-    setIsImportOpen(false);
-};
-
   const handleEditRequest = (contact: Contact) => {
     setContactToEdit(contact);
     setIsFormOpen(true);
@@ -106,14 +90,10 @@ export default function ContactsPage() {
         <div className='flex-1'>
           <PageHeaderHeading>Gerenciamento de Contatos</PageHeaderHeading>
           <PageHeaderDescription>
-            Importe, organize e agrupe seus contatos para mensagens direcionadas.
+            Organize e agrupe seus contatos para mensagens direcionadas.
           </PageHeaderDescription>
         </div>
         <PageHeaderActions>
-            <Button variant="outline" onClick={() => setIsImportOpen(true)}>
-                <Upload className="mr-2 h-4 w-4" />
-                Importar Contatos
-            </Button>
             <Button onClick={handleNewRequest}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Novo Contato
@@ -140,12 +120,6 @@ export default function ContactsPage() {
         }}
         contact={contactToEdit}
         onSave={handleSaveContact}
-      />
-
-      <ImportContactsDialog
-        isOpen={isImportOpen}
-        onOpenChange={setIsImportOpen}
-        onImport={handleImportContacts}
       />
     </div>
   );
