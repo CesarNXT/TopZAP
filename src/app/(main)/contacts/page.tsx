@@ -8,7 +8,7 @@ import { ContactForm } from '@/components/contacts/contact-form';
 import { CsvImportWizard } from '@/components/contacts/csv-import-wizard';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
-import { useUser, useFirestore, useCollection } from '@/firebase';
+import { useUser, useFirestore } from '@/firebase';
 import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query } from 'firebase/firestore';
 import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
 import { useMemoFirebase } from '@/firebase/provider';
@@ -23,13 +23,13 @@ export default function ContactsPage() {
   const [isDeleteAllOpen, setIsDeleteAllOpen] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
+  const [importCounter, setImportCounter] = React.useState(0);
   
   const contactsCollectionRef = useMemoFirebase(() => {
     if (!user) return null;
     return collection(firestore, 'users', user.uid, 'contacts');
   }, [firestore, user]);
 
-  const { data: contacts } = useCollection<Contact>(contactsCollectionRef);
 
   const handleSaveContact = async (contactData: Partial<Contact>) => {
     if (!user) {
@@ -58,6 +58,7 @@ export default function ContactsPage() {
         }
         setContactToEdit(null);
         setIsFormOpen(false);
+        setImportCounter(c => c + 1); // Trigger refetch
     } catch (error: any) {
         console.error("Error saving contact:", error);
         toast({ title: "Erro ao salvar", description: error.message || "Não foi possível salvar o contato.", variant: "destructive" });
@@ -91,6 +92,7 @@ export default function ContactsPage() {
             description: `${contacts.length} novos contatos foram adicionados com sucesso.`
         });
         setIsImportWizardOpen(false);
+        setImportCounter(c => c + 1); // Trigger refetch
     } catch (error: any) {
         console.error("Error batch importing contacts:", error);
         toast({ title: "Erro na importação", description: error.message || "Não foi possível importar os contatos.", variant: "destructive" });
@@ -115,6 +117,7 @@ export default function ContactsPage() {
         await batch.commit();
         
         toast({ title: "Sucesso!", description: "Todos os contatos foram excluídos." });
+        setImportCounter(c => c + 1); // Trigger refetch
     } catch (error: any) {
         console.error("Error deleting all contacts:", error);
         toast({ title: "Erro ao excluir", description: error.message || "Não foi possível excluir todos os contatos.", variant: "destructive" });
@@ -131,6 +134,10 @@ export default function ContactsPage() {
   const handleNewRequest = () => {
     setContactToEdit(null);
     setIsFormOpen(true);
+  }
+
+  const handleDeleteRequest = () => {
+    setImportCounter(c => c + 1);
   }
 
   return (
@@ -151,7 +158,7 @@ export default function ContactsPage() {
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Novo Contato
             </Button>
-            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)} disabled={!contacts || contacts.length === 0}>
+            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Excluir Todos
             </Button>
@@ -159,7 +166,9 @@ export default function ContactsPage() {
       </PageHeader>
       
       <ContactsTable 
+        key={importCounter}
         onEditRequest={handleEditRequest} 
+        onDelete={handleDeleteRequest}
         filter={filter}
         setFilter={setFilter}
       />

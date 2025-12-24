@@ -23,19 +23,19 @@ import {
 import type { Contact } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '../ui/input';
-import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
+import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
 import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2 } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { useUser, useFirestore, useCollection } from '@/firebase';
+import { useUser, useFirestore } from '@/firebase';
 import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot } from 'firebase/firestore';
-import { useMemoFirebase } from '@/firebase/provider';
 
 interface ContactsTableProps {
     onEditRequest: (contact: Contact) => void;
+    onDelete: () => void;
     filter: string;
     setFilter: (filter: string) => void;
 }
@@ -62,7 +62,7 @@ const ActionsCell = ({ row, onEdit, onDelete }: { row: Row<Contact>, onEdit: (co
     );
 };
 
-export function ContactsTable({ onEditRequest, filter, setFilter }: Omit<ContactsTableProps, 'data' | 'setData'>) {
+export function ContactsTable({ onEditRequest, onDelete, filter, setFilter }: ContactsTableProps) {
     const { toast } = useToast();
     const { user } = useUser();
     const firestore = useFirestore();
@@ -115,14 +115,11 @@ export function ContactsTable({ onEditRequest, filter, setFilter }: Omit<Contact
 
     React.useEffect(() => {
         // Reset and load initial data when user changes
-        setContacts([]);
-        setLastDoc(null);
-        setHasMore(true);
-        setIsLoading(true);
         if (user) {
             loadMoreContacts();
         }
-    }, [user]); // Only user is a dependency here, loadMoreContacts is memoized
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user]);
 
      const handleScroll = React.useCallback(() => {
         const container = tableContainerRef.current;
@@ -145,6 +142,7 @@ export function ContactsTable({ onEditRequest, filter, setFilter }: Omit<Contact
                 await deleteDoc(doc(firestore, 'users', user.uid, 'contacts', contactToDelete.id));
                  setContacts(prev => prev.filter(c => c.id !== contactToDelete.id));
                 toast({ title: "Contato removido", description: `${contactToDelete.name} foi removido da sua lista.` });
+                onDelete();
             } catch (error) {
                 console.error("Error deleting contact: ", error);
                 toast({ variant: 'destructive', title: "Erro", description: "Não foi possível remover o contato." });
@@ -163,7 +161,6 @@ export function ContactsTable({ onEditRequest, filter, setFilter }: Omit<Contact
           return (
             <div className="flex items-center gap-3">
               <Avatar className="h-8 w-8">
-                <AvatarImage src={contact.avatarUrl} alt={contact.name} />
                 <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
               </Avatar>
               <span className="font-medium">{contact.name}</span>
