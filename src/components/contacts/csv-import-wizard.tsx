@@ -63,7 +63,6 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
       Papa.parse(selectedFile, {
         header: true,
         skipEmptyLines: true,
-        preview: 5, // Only need a few rows to get headers
         complete: (results) => {
           setHeaders(results.meta.fields || []);
           setData(results.data);
