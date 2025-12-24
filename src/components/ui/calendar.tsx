@@ -18,7 +18,7 @@ const DayPicker = ({
   disabled?: (date: Date) => boolean;
   initialFocus?: boolean;
 }) => {
-  const { selected, onSelect } = props;
+  const { selected, onSelect } = props as any;
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (onSelect) {
@@ -50,7 +50,6 @@ function Calendar({
 }: CalendarProps) {
   return (
     <DayPicker
-      showOutsideDays={showOutsideDays}
       className={cn("p-3", className)}
       {...props}
     />
