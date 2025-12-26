@@ -204,7 +204,7 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
                   <SelectTrigger id="name-column">
                     <SelectValue placeholder="Selecione a coluna (ou deixe vazio)" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
                     <SelectItem value="none_selection_special_value">-- Não usar nome --</SelectItem>
                     {headers.map(header => <SelectItem key={header} value={header}>{header}</SelectItem>)}
                   </SelectContent>
@@ -216,7 +216,7 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
                   <SelectTrigger id="phone-column">
                     <SelectValue placeholder="Selecione a coluna" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
                     {headers.map(header => <SelectItem key={header} value={header}>{header}</SelectItem>)}
                   </SelectContent>
                 </Select>
