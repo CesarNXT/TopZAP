@@ -480,7 +480,9 @@ export default function WhatsAppConnectPage() {
 
     // Render Logic
     const isConnected = status?.connected === true || status?.status === 'connected';
-    const hasQrCode = !!status?.qrCode && !isConnected;
+    // Only show QR Code if we have it AND the timer is active. 
+    // If timer is null (expired), we treat it as no QR code so the UI resets.
+    const hasQrCode = !!status?.qrCode && !isConnected && timeLeft !== null;
 
     return (
         <div className="container flex min-h-[calc(100vh-4rem)] items-center justify-center py-8">

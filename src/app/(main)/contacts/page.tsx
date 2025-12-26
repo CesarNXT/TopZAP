@@ -86,14 +86,18 @@ export default function ContactsPage() {
             toast({ title: "Contato atualizado!", description: `${dataToSave.name} foi atualizado com sucesso.` });
         } else {
             // Add new contact
-            const newContact: Omit<Contact, 'id' | 'avatarUrl'> = {
+            const newContact: any = {
                 userId: user.uid,
                 name: dataToSave.name || '',
                 phone: dataToSave.phone || '',
                 segment: dataToSave.segment || 'New',
                 createdAt: new Date(),
-                birthday: dataToSave.birthday || undefined // Ensure no undefined value
             };
+
+            if (dataToSave.birthday) {
+                newContact.birthday = dataToSave.birthday;
+            }
+
             await addDoc(collection(firestore, 'users', user.uid, 'contacts'), newContact);
             toast({ title: "Contato criado!", description: `${newContact.name} foi adicionado à sua lista.` });
         }

@@ -32,7 +32,7 @@ import {
 import { Calendar } from '../ui/calendar';
 import { format } from 'date-fns';
 import type { Contact } from '@/lib/types';
-import { serverTimestamp } from 'firebase/firestore';
+import { serverTimestamp, deleteField } from 'firebase/firestore';
 import { ddiList } from '@/lib/ddi-list';
 
 const formSchema = z.object({
@@ -121,16 +121,26 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
     
     const fullPhone = values.ddi + finalPhone;
 
-    let dataToSave: Partial<Contact> & { createdAt?: any } = {
+    let dataToSave: any = {
         ...values,
         phone: fullPhone,
-        birthday: birthdayString || undefined,
     };
     
-    // Remove ddi from dataToSave as it is not part of Contact type (if strictly typed)
-    // But Partial<Contact> allows subset. However, 'ddi' is likely not in Contact type.
-    // We should cast or remove it.
-    delete (dataToSave as any).ddi;
+    // Handle birthday: if set, use string; if cleared/empty:
+    // - For existing contact: use deleteField() to remove from Firestore
+    // - For new contact: delete the key so it's not sent as undefined
+    if (birthdayString) {
+        dataToSave.birthday = birthdayString;
+    } else {
+        if (values.id) {
+            dataToSave.birthday = deleteField();
+        } else {
+            delete dataToSave.birthday;
+        }
+    }
+
+    // Remove ddi from dataToSave
+    delete dataToSave.ddi;
     
     if (!values.id) { // New contact
         dataToSave.createdAt = serverTimestamp();
