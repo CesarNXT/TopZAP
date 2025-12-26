@@ -75,6 +75,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     const [pagesCache, setPagesCache] = React.useState<Record<number, Contact[]>>({});
     const [hasNextPage, setHasNextPage] = React.useState(false);
     const [allContactsCache, setAllContactsCache] = React.useState<Contact[] | null>(null);
+    const [searchTerm, setSearchTerm] = React.useState("");
     
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -233,8 +234,6 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     }
   });
 
-  const nameFilter = (table.getColumn("name")?.getFilterValue() as string) ?? "";
-
   const loadContacts = React.useCallback(async () => {
       if (!user) return;
       
@@ -251,15 +250,14 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
       let queries: QueryConstraint[] = [];
 
       // Multi-query search implementation replaced by Client-Side Search for "Contains" support
-      if (nameFilter) {
+      if (searchTerm) {
         setIsLoading(true);
         try {
             let searchSource = allContactsCache;
 
             // If we haven't fetched all contacts yet, or cache is empty, do it now
             if (!searchSource || searchSource.length === 0) {
-                 // Notify user that we are loading a large dataset
-                 toast({ title: "Indexando contatos...", description: "Carregando sua lista para habilitar a busca avançada." });
+                 // Toast removed as per user request
 
                  // Fetch all contacts in batches to avoid Firebase 10k limit and ensure we find the contact
                  let allDocs: any[] = [];
@@ -299,12 +297,12 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                  searchSource.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
                  
                  setAllContactsCache(searchSource);
-                 toast({ title: "Busca Pronta", description: `${searchSource.length} contatos indexados.` });
+                 // Toast removed as per user request
             }
 
             // Perform client-side filtering
-            const lowerFilter = nameFilter.toLowerCase();
-            const rawFilter = nameFilter.replace(/\D/g, '');
+            const lowerFilter = searchTerm.toLowerCase();
+            const rawFilter = searchTerm.replace(/\D/g, '');
             
             let filtered = searchSource.filter(contact => {
                 const contactName = (contact.name || '').toLowerCase();
@@ -318,7 +316,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 
                 const phoneMatch = rawFilter 
                     ? contactRawPhone.includes(rawFilter) 
-                    : phoneStr.includes(nameFilter); // Fallback for formatted input like (31)
+                    : phoneStr.includes(searchTerm); // Fallback for formatted input like (31)
 
                 return nameMatch || phoneMatch;
             });
@@ -355,9 +353,9 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
       // Standard Load (No Search Filter)
       if (filter !== 'all') {
-          // If nameFilter is present, we prioritize name search logic and do client-side filtering for segment
+          // If searchTerm is present, we prioritize name search logic and do client-side filtering for segment
           // to avoid composite index requirement.
-          if (!nameFilter) {
+          if (!searchTerm) {
               const segmentMap: Record<string, string> = {
                   'blocked': 'Inactive',
                   'inactive': 'Inactive',
@@ -390,9 +388,9 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
           const documentSnapshots = await getDocs(q);
           let newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
 
-          // If we have both nameFilter and segment filter, we did NOT apply segment filter in query
+          // If we have both searchTerm and segment filter, we did NOT apply segment filter in query
           // So we must apply it in memory here
-          if (filter !== 'all' && nameFilter) {
+          if (filter !== 'all' && searchTerm) {
               const segmentMap: Record<string, string> = {
                   'blocked': 'Inactive',
                   'inactive': 'Inactive',
@@ -429,7 +427,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         } finally {
           setIsLoading(false);
       }
-  }, [user, firestore, page, filter, nameFilter, pageCursors, toast, pagesCache]);
+  }, [user, firestore, page, filter, searchTerm, pageCursors, toast, pagesCache]);
   
   // Reset pagination when filters change
   React.useEffect(() => {
@@ -438,7 +436,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
       setContacts([]);
       setPagesCache({});
       // Note: We intentionally do NOT clear allContactsCache here to reuse it during search typing
-  }, [filter, nameFilter, importCounter]);
+  }, [filter, searchTerm, importCounter]);
 
   // Clear allContactsCache only when explicit refresh actions happen
   React.useEffect(() => {
@@ -447,10 +445,10 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
   // Load contacts when page or filters change
   React.useEffect(() => {
-    // Debounce load if nameFilter is present to avoid rapid fire queries
+    // Debounce load if searchTerm is present to avoid rapid fire queries
     const timeoutId = setTimeout(() => {
         loadContacts();
-    }, nameFilter ? 300 : 0);
+    }, searchTerm ? 300 : 0);
 
     return () => clearTimeout(timeoutId);
   }, [loadContacts]);
@@ -478,8 +476,8 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                     placeholder="Filtrar por nome ou telefone..."
-                    value={nameFilter}
-                    onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
                     className="pl-9"
                 />
             </div>
