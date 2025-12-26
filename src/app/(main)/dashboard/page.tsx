@@ -15,7 +15,8 @@ import {
   TrendingUp,
   TriangleAlert,
   XCircle,
-  PlusCircle
+  PlusCircle,
+  CalendarDays
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -28,7 +29,7 @@ import {
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import type { Campaign } from '@/lib/types';
-import { subDays, format, isToday } from 'date-fns';
+import { subDays, format, isToday, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useUser, useCollection, useFirestore } from '@/firebase';
 import { useMemoFirebase } from '@/firebase/provider';
@@ -43,7 +44,7 @@ const Greeting = () => {
     return <PageHeaderHeading>Olá, {userName}.</PageHeaderHeading>;
 }
 
-const StatCard: React.FC<{ title: string; value: string | number; description: string; icon: React.ReactNode; isError?: boolean, id?: string, gradient?: string }> = ({ title, value, description, icon, isError, id, gradient }) => (
+const StatCard: React.FC<{ title: string; value: string | number | React.ReactNode; description: string; icon: React.ReactNode; isError?: boolean, id?: string, gradient?: string }> = ({ title, value, description, icon, isError, id, gradient }) => (
     <div id={id} className={`relative p-[2px] rounded-xl bg-gradient-to-r ${gradient || 'from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-800'} shadow-sm hover:shadow-md transition-shadow duration-300`}>
         <div className={`h-full w-full bg-card rounded-lg ${isError ? 'bg-destructive/10' : ''}`}>
             <CardHeader className="pb-2">
@@ -53,7 +54,9 @@ const StatCard: React.FC<{ title: string; value: string | number; description: s
                 </CardTitle>
             </CardHeader>
             <CardContent>
-                <p className={`text-4xl font-bold tracking-tight ${isError ? 'text-destructive' : 'text-foreground'}`}>{value}</p>
+                <div className={`text-4xl font-bold tracking-tight ${isError ? 'text-destructive' : 'text-foreground'}`}>
+                    {value}
+                </div>
                 <p className='text-sm text-muted-foreground'>{description}</p>
             </CardContent>
         </div>
@@ -73,14 +76,57 @@ export default function DashboardPage() {
 
     const campaignsData = allCampaigns || [];
 
+    const currentMonthPrefix = format(new Date(), 'yyyy-MM');
+
+    const monthlyStats = {
+        sent: campaignsData
+            .filter(c => c.sentDate && c.sentDate.startsWith(currentMonthPrefix))
+            .reduce((acc, curr) => {
+                // Sum sent messages (fallback to recipients count if stats.sent missing)
+                const sent = curr.stats?.sent ?? curr.recipients ?? 0;
+                return acc + sent;
+            }, 0)
+    };
+
+    const engagementStats = (() => {
+        const validCampaigns = campaignsData.filter(c => 
+            ['Sent', 'Completed', 'Done', 'Concluído'].includes(c.status || '')
+        );
+        
+        if (validCampaigns.length === 0) return 0;
+
+        let totalRecipients = 0;
+        let totalEngaged = 0;
+
+        validCampaigns.forEach(c => {
+            const rec = c.recipients || 0;
+            if (rec > 0) {
+                totalRecipients += rec;
+                // Engagement: Max of replies (engagement) or read count
+                // User defined: "minimo de resposta"
+                const engaged = Math.max(c.engagement || 0, c.stats?.read || 0);
+                totalEngaged += engaged;
+            }
+        });
+
+        return totalRecipients > 0 ? (totalEngaged / totalRecipients) * 100 : 0;
+    })();
+
     const dailyStats = {
         sentToday: campaignsData.filter(c => c.status === 'Sent' && c.sentDate && isToday(new Date(c.sentDate))).length,
         inQueue: campaignsData.filter(c => c.status === 'Scheduled').length,
-        errorRate: campaignsData.filter(c => c.sentDate && isToday(new Date(c.sentDate))).length > 0
-            ? (campaignsData.filter(c => c.sentDate && isToday(new Date(c.sentDate)) && c.status === 'Failed').length / campaignsData.filter(c => c.sentDate && isToday(new Date(c.sentDate))).length) * 100
-            : 0,
-        dailyLimit: 300,
+        engagementRate: engagementStats,
+        monthlySent: monthlyStats.sent
     };
+
+    const getEngagementLabel = (rate: number) => {
+        if (rate >= 30) return { label: "Excelente", color: "text-green-600" };
+        if (rate >= 15) return { label: "Muito Bom", color: "text-blue-600" };
+        if (rate >= 5) return { label: "Bom", color: "text-yellow-600" };
+        return { label: "Abaixo da Média", color: "text-red-600" };
+    };
+
+    const engagementLabel = getEngagementLabel(dailyStats.engagementRate);
 
     const weeklyPerformance = Array.from({ length: 7 }).map((_, i) => {
         const date = subDays(new Date(), i);
@@ -127,29 +173,27 @@ export default function DashboardPage() {
         />
 
         <StatCard
-            title="Taxa de Erro"
-            value={`${dailyStats.errorRate.toFixed(1)}%`}
-            description="Falhas de envio hoje"
-            icon={<XCircle />}
-            isError={dailyStats.errorRate > 5}
-            gradient={dailyStats.errorRate > 5 ? "from-red-500 to-orange-500" : "from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-800"}
+            title="Taxa de Engajamento"
+            value={
+                <div className="flex flex-col items-start">
+                    <span>{dailyStats.engagementRate.toFixed(1)}%</span>
+                    <span className={`text-xs font-medium ${engagementLabel.color} mt-1`}>
+                        {engagementLabel.label}
+                    </span>
+                </div>
+            }
+            description="Média de respostas/leituras"
+            icon={<TrendingUp />}
+            gradient="from-purple-400 to-indigo-400"
         />
 
-        <div className="relative p-[2px] rounded-xl bg-gradient-to-r from-purple-400 to-indigo-400 shadow-sm hover:shadow-md transition-shadow duration-300">
-            <Card className="h-full w-full rounded-lg border-none">
-                 <CardHeader className="pb-2">
-                    <CardTitle className='flex items-center justify-between text-base'>
-                        <span>Limite de Segurança</span>
-                        <TriangleAlert className="h-5 w-5 text-muted-foreground" />
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <p className="text-2xl font-bold mb-2 tracking-tight text-foreground">{`${dailyStats.sentToday}/${dailyStats.dailyLimit}`}</p>
-                    <Progress value={(dailyStats.sentToday / dailyStats.dailyLimit) * 100} className='h-3' />
-                     <p className='text-sm text-muted-foreground mt-2'>Cota de envios diária</p>
-                </CardContent>
-            </Card>
-        </div>
+        <StatCard
+            title="Envios no Mês"
+            value={dailyStats.monthlySent}
+            description="Total de envios este mês"
+            icon={<CalendarDays />}
+            gradient="from-pink-400 to-rose-400"
+        />
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6">

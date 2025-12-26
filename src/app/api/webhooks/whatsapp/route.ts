@@ -320,42 +320,134 @@ export async function POST(request: Request) {
             if (!querySnapshot.empty) {
                 const userDoc = querySnapshot.docs[0];
                 const campaignsRef = userDoc.ref.collection('campaigns');
-                const folderId = safeData.folder_id || safeData.folderId || safeData.folderID;
+                const folderId = String(safeData.folder_id || safeData.folderId || safeData.folderID);
                 const status = safeData.status || 'updated';
                 const count = typeof safeData.count === 'number' ? safeData.count : safeData.messageCount;
                 
-                const payload: any = {
-                    status,
-                    updatedAt: new Date().toISOString(),
+                // Helper to extract stats
+                const extractStats = () => {
+                     const stats: any = {};
+                     if (safeData.info && typeof safeData.info === 'object') {
+                        if (typeof safeData.info.sent === 'number') stats.sent = safeData.info.sent;
+                        if (typeof safeData.info.failed === 'number') stats.failed = safeData.info.failed;
+                        if (typeof safeData.info.delivered === 'number') stats.delivered = safeData.info.delivered;
+                     } else if (count !== undefined) {
+                        if (['completed', 'sent', 'done'].includes(status.toLowerCase())) {
+                            stats.sent = count;
+                        }
+                     }
+                     return stats;
                 };
                 
-                if (count !== undefined) payload.count = count;
-                if (safeData.info && typeof safeData.info === 'object') {
-                    payload.info = safeData.info;
-                    // Map info to stats
-                    if (typeof safeData.info.sent === 'number') payload['stats.sent'] = safeData.info.sent;
-                    if (typeof safeData.info.failed === 'number') payload['stats.failed'] = safeData.info.failed;
-                    if (typeof safeData.info.delivered === 'number') payload['stats.delivered'] = safeData.info.delivered;
-                } else if (count !== undefined) {
-                    // Fallback if no info object
-                    // Only mark as sent if status confirms completion
-                    if (['completed', 'sent', 'done'].includes(status.toLowerCase())) {
-                        payload['stats.sent'] = count;
-                    }
-                    // If sending, count represents total recipients
-                    if (status.toLowerCase() === 'sending') {
-                        payload['recipients'] = count;
-                    }
-                }
+                const newStats = extractStats();
 
                 if (folderId) {
-                    await campaignsRef.doc(String(folderId)).set(payload, { merge: true });
-                } else {
-                    // If no folderId, we might want to log it or ignore. 
-                    // Usually sender event comes with folderId (campaignId).
-                    // If not, we can't link to a specific campaign easily without context.
-                    // But we'll add it as a new doc just in case to not lose data.
-                     await campaignsRef.add(payload);
+                    // Strategy:
+                    // 1. Check if direct doc exists (Legacy/Single Campaign)
+                    // 2. Check if it's a batch in a larger campaign
+                    
+                    const directDocRef = campaignsRef.doc(folderId);
+                    const directDocSnap = await directDocRef.get();
+
+                    if (directDocSnap.exists) {
+                         // Legacy Update
+                         const payload: any = {
+                             status,
+                             updatedAt: new Date().toISOString(),
+                         };
+                         if (count !== undefined) payload.count = count;
+                         // Flatten stats for legacy root update
+                         Object.entries(newStats).forEach(([k, v]) => {
+                             payload[`stats.${k}`] = v;
+                         });
+                         if (status.toLowerCase() === 'sending' && count !== undefined) {
+                             payload['recipients'] = count;
+                         }
+                         await directDocRef.update(payload);
+                         console.log(`[Webhook] Updated legacy campaign ${folderId}`);
+                    } else {
+                        // Check for Batch
+                        const batchQuery = await campaignsRef.where('batchIds', 'array-contains', folderId).get();
+                        
+                        if (!batchQuery.empty) {
+                            const campaignDoc = batchQuery.docs[0];
+                            const campaignData = campaignDoc.data();
+                            
+                            // Prepare batch update
+                            const batchUpdateKey = `batches.${folderId}`;
+                            const updatePayload: any = {
+                                [`${batchUpdateKey}.status`]: status,
+                                [`${batchUpdateKey}.updatedAt`]: new Date().toISOString()
+                            };
+                            
+                            // Update Batch Stats
+                            Object.entries(newStats).forEach(([k, v]) => {
+                                updatePayload[`${batchUpdateKey}.stats.${k}`] = v;
+                            });
+                            
+                            // Calculate Global Stats
+                            // We need to fetch current batches, overlay our new data, and sum up.
+                            const currentBatches = campaignData.batches || {};
+                            const currentBatch = currentBatches[folderId] || {};
+                            const updatedBatch = {
+                                ...currentBatch,
+                                stats: { ...(currentBatch.stats || {}), ...newStats },
+                                status: status
+                            };
+                            
+                            // Re-aggregate
+                            const allBatches = { ...currentBatches, [folderId]: updatedBatch };
+                            const globalStats = {
+                                sent: 0,
+                                delivered: 0,
+                                failed: 0,
+                                read: (campaignData.stats?.read || 0), // Read/Replied come from different events, keep existing
+                                replied: (campaignData.stats?.replied || 0),
+                                blocked: (campaignData.stats?.blocked || 0)
+                            };
+
+                            let allCompleted = true;
+                            let anySending = false;
+
+                            Object.values(allBatches).forEach((b: any) => {
+                                globalStats.sent += (b.stats?.sent || 0);
+                                globalStats.delivered += (b.stats?.delivered || 0);
+                                globalStats.failed += (b.stats?.failed || 0);
+                                
+                                if (!['completed', 'sent', 'done', 'failed'].includes(b.status?.toLowerCase())) {
+                                    allCompleted = false;
+                                }
+                                if (b.status?.toLowerCase() === 'sending') {
+                                    anySending = true;
+                                }
+                            });
+                            
+                            updatePayload['stats.sent'] = globalStats.sent;
+                            updatePayload['stats.delivered'] = globalStats.delivered;
+                            updatePayload['stats.failed'] = globalStats.failed;
+                            
+                            // Update Global Status
+                            if (allCompleted) updatePayload['status'] = 'Completed';
+                            else if (anySending) updatePayload['status'] = 'Sending';
+                            
+                            await campaignDoc.ref.update(updatePayload);
+                            console.log(`[Webhook] Updated batch ${folderId} in campaign ${campaignDoc.id}`);
+
+                        } else {
+                            console.log(`[Webhook] No campaign found for folderId ${folderId}. Creating new legacy doc.`);
+                            // Fallback to creating new doc if not found (Legacy behavior)
+                             const payload: any = {
+                                status,
+                                updatedAt: new Date().toISOString(),
+                                uazapiId: folderId // Ensure we save the ID
+                            };
+                            if (count !== undefined) payload.count = count;
+                            Object.entries(newStats).forEach(([k, v]) => {
+                                payload[`stats.${k}`] = v;
+                            });
+                            await campaignsRef.doc(folderId).set(payload);
+                        }
+                    }
                 }
             }
         }

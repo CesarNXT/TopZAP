@@ -20,6 +20,7 @@ interface SpeedSelectorProps {
 
 export function SpeedSelector({ form }: SpeedSelectorProps) {
   const sendSpeedValue = form.watch('sendSpeed');
+  const dailyLimit = form.watch('dailyLimit');
   
   return (
     <Card>
@@ -94,6 +95,16 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
           </Alert>
         )}
 
+        {dailyLimit > 300 && (
+            <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Atenção: Limite Alto</AlertTitle>
+            <AlertDescription>
+                Enviar mais de 300 mensagens por dia aumenta drasticamente o risco de bloqueio do seu número. Valores acima de 300 são de sua total responsabilidade.
+            </AlertDescription>
+            </Alert>
+        )}
+
         <div className="border-t pt-6">
             <h3 className="font-medium mb-4 flex items-center gap-2">
                 <Clock className="w-4 h-4" />
@@ -109,14 +120,13 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                             <FormControl>
                                 <Input 
                                     type="number" 
-                                    min={300}
                                     {...field} 
-                                    disabled
-                                    value={300}
+                                    max={500}
+                                    onChange={e => field.onChange(Number(e.target.value))}
                                 />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Fixo em 300 mensagens por dia para segurança.
+                                Defina quantos contatos serão processados por dia. O padrão recomendado é 300.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>

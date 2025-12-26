@@ -145,11 +145,30 @@ export default function CampaignReportPage() {
         }
     }, [uid, id, refreshData]);
 
+    const batchesList = useMemo(() => {
+        if (!campaign || !campaign.batches) return [];
+        return Object.values(campaign.batches).sort((a: any, b: any) => 
+            new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+        );
+    }, [campaign]);
+
     const handleControl = async (action: 'stop' | 'continue' | 'delete') => {
         if (!uid || !id) return;
         
         if (action === 'delete') {
              if (!confirm('Tem certeza que deseja excluir esta campanha? Esta ação é irreversível.')) return;
+             
+             setIsControlling(true);
+             const result = await deleteCampaignAction(uid, id as string);
+             setIsControlling(false);
+
+             if (result.success) {
+                toast({ title: "Campanha excluída", description: "Você será redirecionado." });
+                router.push('/campaigns');
+             } else {
+                toast({ variant: "destructive", title: "Erro ao excluir", description: result.error });
+             }
+             return;
         }
 
         setIsControlling(true);
@@ -160,14 +179,10 @@ export default function CampaignReportPage() {
 
         if (result.success) {
             toast({ 
-                title: action === 'stop' ? "Campanha pausada" : action === 'continue' ? "Campanha retomada" : "Campanha excluída",
+                title: action === 'stop' ? "Campanha pausada" : "Campanha retomada",
                 description: "O status foi atualizado."
             });
-            if (action === 'delete') {
-                router.push('/campaigns');
-            } else {
-                refreshData();
-            }
+            refreshData();
         } else {
             toast({ variant: "destructive", title: "Erro na ação", description: result.error });
         }
@@ -208,18 +223,34 @@ export default function CampaignReportPage() {
     const delivered = useLocalStats ? localStats.delivered : (providerStats ? (providerStats.log_delivered || 0) : (campaign.stats?.delivered || 0));
     const read = useLocalStats ? localStats.read : (providerStats ? (providerStats.log_read || 0) : (campaign.stats?.read || 0));
     const failed = useLocalStats ? localStats.failed : (providerStats ? (providerStats.log_failed || 0) : (campaign.stats?.failed || 0));
+    const replied = campaign.stats?.replied || replies.length || 0;
+    const blocked = campaign.stats?.blocked || blocks.length || 0;
     
     const recipients = campaign.recipients || 1;
     
     // Calculate actual completed count (delivered + read + failed + sent)
-    // We include 'sent' because for the user, if it's sent, it's processed/done.
-    // This fixes the issue where progress shows 0% even if messages are 'Sent'.
     const completedCount = delivered + read + failed + sent;
-    
-    // If we want to show "Processed" (including scheduled), we keep it as is.
-    // But user wants "Concluded". 
-    // Let's use completedCount for the progress bar percentage.
     const progress = Math.min(100, Math.round((completedCount / recipients) * 100));
+
+    // ROI Metrics
+    const replyRate = sent > 0 ? (replied / sent) * 100 : 0;
+    const blockRate = sent > 0 ? (blocked / sent) * 100 : 0;
+    const deliveryRate = sent > 0 ? (delivered / sent) * 100 : 0;
+
+    let verdict = { label: "Aguardando dados...", color: "text-gray-500", description: "Ainda não há dados suficientes para análise." };
+    if (sent > 10) {
+        if (blockRate > 3) {
+            verdict = { label: "Crítico", color: "text-red-600", description: "Taxa de bloqueio muito alta! Revise sua lista e conteúdo." };
+        } else if (replyRate > 15) {
+            verdict = { label: "Excelente!", color: "text-green-600", description: "Alto engajamento. O público adorou a campanha." };
+        } else if (replyRate > 5) {
+            verdict = { label: "Muito Bom", color: "text-blue-600", description: "Resultados sólidos e dentro da média esperada." };
+        } else if (replyRate > 1) {
+            verdict = { label: "Regular", color: "text-yellow-600", description: "Engajamento baixo. Tente melhorar o Call to Action." };
+        } else {
+            verdict = { label: "Baixo Desempenho", color: "text-orange-600", description: "Poucas respostas até agora." };
+        }
+    }
 
     const statusRaw = campaign.status || 'Draft';
     // Normalize status for display logic
@@ -312,6 +343,36 @@ export default function CampaignReportPage() {
                 </CardContent>
             </Card>
 
+            {/* Verdict Section */}
+            <Card className="border-l-4">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <span className={verdict.color}>{verdict.label}</span>
+                        <span className="text-sm font-normal text-muted-foreground ml-auto">Análise de Performance</span>
+                    </CardTitle>
+                    <CardDescription>{verdict.description}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                        <div className="flex flex-col items-center p-2 rounded-lg bg-secondary/10">
+                            <div className="text-2xl font-bold">{replyRate.toFixed(1)}%</div>
+                            <div className="text-xs text-muted-foreground font-medium">Taxa de Resposta</div>
+                            <div className="text-[10px] text-muted-foreground mt-1">Metas: &gt;5% (Bom)</div>
+                        </div>
+                        <div className="flex flex-col items-center p-2 rounded-lg bg-secondary/10">
+                            <div className="text-2xl font-bold">{deliveryRate.toFixed(1)}%</div>
+                            <div className="text-xs text-muted-foreground font-medium">Taxa de Entrega</div>
+                            <div className="text-[10px] text-muted-foreground mt-1">Metas: &gt;90% (Ideal)</div>
+                        </div>
+                        <div className="flex flex-col items-center p-2 rounded-lg bg-secondary/10">
+                            <div className={`text-2xl font-bold ${blockRate > 3 ? 'text-red-500' : ''}`}>{blockRate.toFixed(1)}%</div>
+                            <div className="text-xs text-muted-foreground font-medium">Taxa de Bloqueio</div>
+                            <div className="text-[10px] text-muted-foreground mt-1">Metas: &lt;1% (Seguro)</div>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
             {/* Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <Card>
@@ -320,7 +381,7 @@ export default function CampaignReportPage() {
                         <MessageSquare className="h-4 w-4 text-blue-500" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{replies.length}</div>
+                        <div className="text-2xl font-bold">{replied}</div>
                         <p className="text-xs text-muted-foreground">Mensagens respondidas</p>
                     </CardContent>
                 </Card>
@@ -330,7 +391,7 @@ export default function CampaignReportPage() {
                         <ShieldAlert className="h-4 w-4 text-red-500" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{blocks.length}</div>
+                        <div className="text-2xl font-bold">{blocked}</div>
                         <p className="text-xs text-muted-foreground">Solicitações de bloqueio</p>
                     </CardContent>
                 </Card>
@@ -357,8 +418,9 @@ export default function CampaignReportPage() {
             </div>
 
             {/* Interactions Tabs */}
-            <Tabs defaultValue="messages" className="w-full">
+            <Tabs defaultValue={batchesList.length > 0 ? "batches" : "messages"} className="w-full">
                 <TabsList className="mb-4">
+                    {batchesList.length > 0 && <TabsTrigger value="batches">Lotes (Dias)</TabsTrigger>}
                     <TabsTrigger value="messages">Mensagens</TabsTrigger>
                     <TabsTrigger value="replies">
                         Respostas
@@ -369,6 +431,55 @@ export default function CampaignReportPage() {
                         {blocks.length > 0 && <Badge variant="destructive" className="ml-2">{blocks.length}</Badge>}
                     </TabsTrigger>
                 </TabsList>
+                
+                {batchesList.length > 0 && (
+                    <TabsContent value="batches">
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Lotes de Envio</CardTitle>
+                                <CardDescription>Progresso individual por dia/lote</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Nome</TableHead>
+                                            <TableHead>Agendado Para</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead>Progresso</TableHead>
+                                            <TableHead>Métricas</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {batchesList.map((batch: any) => (
+                                            <TableRow key={batch.id}>
+                                                <TableCell>{batch.name}</TableCell>
+                                                <TableCell>{new Date(batch.scheduledAt).toLocaleString()}</TableCell>
+                                                <TableCell>
+                                                    <Badge variant="outline">{translateStatus(batch.status)}</Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex items-center gap-2">
+                                                        <Progress value={
+                                                            batch.count > 0 ? 
+                                                            Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0
+                                                        } className="h-2 w-[60px]" />
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0}%
+                                                        </span>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="text-xs text-muted-foreground">
+                                                    {batch.stats?.sent || 0} env / {batch.stats?.delivered || 0} entr
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </CardContent>
+                        </Card>
+                    </TabsContent>
+                )}
                 
                 <TabsContent value="messages">
                     <Card>

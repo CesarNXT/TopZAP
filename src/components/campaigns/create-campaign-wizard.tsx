@@ -62,7 +62,7 @@ const formSchema = z.object({
     message: 'Você deve aceitar os termos de responsabilidade para continuar.',
   }),
   media: z.any().optional(),
-  dailyLimit: z.number().default(300),
+  dailyLimit: z.number().min(10, { message: "O limite deve ser de pelo menos 10 mensagens." }).max(500, { message: "O limite máximo permitido é de 500 mensagens por dia para segurança do seu número." }).default(300),
   startDate: z.string().optional(),
   startHour: z.string().default("08:00"),
   nextDaysStartHour: z.string().default("08:00"),
@@ -102,8 +102,19 @@ export function CreateCampaignWizard() {
         return collection(firestore, 'users', user.uid, 'contacts');
     }, [firestore, user]);
 
-    const { data: contacts } = useCollection<Contact>(contactsQuery);
+    const { data: contacts, loading: contactsLoading } = useCollection<Contact>(contactsQuery);
     const validContacts = contacts || [];
+
+    // Fallback: If contacts array is empty but loading is true, we should wait.
+    // If loading is false and contacts is empty, maybe we should try to fetch via batch if we suspect an issue?
+    // But usually simple collection fetch works. The main issue is likely the UI showing 0 during load.
+    
+    // Add effect to toast loading state if it takes too long
+    useEffect(() => {
+        if (contactsLoading) {
+            // Optional: could show a toast or just rely on the UI spinner we will add
+        }
+    }, [contactsLoading]);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -145,7 +156,7 @@ export function CreateCampaignWizard() {
         const totalContacts = targetContacts.length;
         if (totalContacts === 0) return null;
 
-        const limit = 300;
+        const limit = dailyLimit || 300;
         const totalDays = Math.ceil(totalContacts / limit);
         
         // Speed Calculation (Average seconds per message)
@@ -205,7 +216,7 @@ export function CreateCampaignWizard() {
         }
 
         return batches;
-    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, nextDaysStartHour]);
+    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, nextDaysStartHour, dailyLimit]);
 
 
     const next = async () => {
@@ -329,7 +340,7 @@ export function CreateCampaignWizard() {
 
         // Call Server Action to Send
         // Batching Logic for Daily Limits
-        const limit = 300; // Fixed daily limit
+        const limit = values.dailyLimit || 300; // Dynamic daily limit
         const totalContacts = phones.length;
         const batches = [];
         
@@ -359,7 +370,10 @@ export function CreateCampaignWizard() {
         }
 
         let successCount = 0;
-        let lastDocRef = null;
+        let lastDocRef: any = null;
+        
+        const batchIds: string[] = [];
+        const batchesMap: Record<string, any> = {};
 
         for (let i = 0; i < batches.length; i++) {
             const batchPhones = batches[i];
@@ -413,34 +427,20 @@ export function CreateCampaignWizard() {
                  continue; // Continue with next batch? Or stop? Let's continue.
             }
 
-            const newCampaign: Omit<Campaign, 'id'> = {
-                name: batchName,
-                status: 'Scheduled', // Since we are scheduling
-                sentDate: new Date(scheduledFor).toISOString(),
-                recipients: batchPhones.length,
-                engagement: 0,
-                userId: user.uid,
-            };
-
-            try {
-                const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
-                
-                const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId || sendResult.folder_id;
-                let docRef;
-    
-                if (uazapiId) {
-                    docRef = doc(campaignCollection, String(uazapiId));
-                    await setDoc(docRef, newCampaign);
-                } else {
-                    docRef = await addDoc(campaignCollection, newCampaign);
-                }
-                
+            const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId || sendResult.folder_id;
+            
+            if (uazapiId) {
+                const idStr = String(uazapiId);
+                batchIds.push(idStr);
+                batchesMap[idStr] = {
+                    id: idStr,
+                    name: batchName,
+                    scheduledAt: new Date(scheduledFor).toISOString(),
+                    status: 'Scheduled',
+                    count: batchPhones.length,
+                    stats: { sent: 0, delivered: 0, read: 0, failed: 0 }
+                };
                 successCount++;
-                lastDocRef = docRef;
-
-            } catch (e) {
-                console.error("Error creating campaign doc", e);
-                toast({ variant: "destructive", title: `Erro ao salvar campanha`, description: "A campanha foi enviada mas houve erro ao salvar no histórico." });
             }
 
             // Prepare date for next batch
@@ -448,6 +448,33 @@ export function CreateCampaignWizard() {
         }
         
         if (successCount > 0) {
+            try {
+                const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
+                
+                // Determine Start Date (First Batch)
+                const firstBatchId = batchIds[0];
+                const startDate = batchesMap[firstBatchId]?.scheduledAt || new Date().toISOString();
+
+                const newCampaign: Omit<Campaign, 'id'> = {
+                    name: values.name,
+                    status: 'Scheduled',
+                    sentDate: new Date().toISOString(), // Created At
+                    startDate: startDate,
+                    recipients: phones.length, // Total recipients
+                    engagement: 0,
+                    userId: user.uid,
+                    batchIds: batchIds,
+                    batches: batchesMap,
+                    stats: { sent: 0, delivered: 0, read: 0, replied: 0, blocked: 0, failed: 0 }
+                };
+
+                lastDocRef = await addDoc(campaignCollection, newCampaign);
+
+            } catch (e) {
+                console.error("Error creating campaign doc", e);
+                toast({ variant: "destructive", title: `Erro ao salvar campanha`, description: "A campanha foi enviada mas houve erro ao salvar no histórico." });
+            }
+
             // Update 'New' contacts to 'Regular'
             const newContacts = targetContacts.filter(c => c.segment === 'New' || c.segment === 'new');
             if (newContacts.length > 0) {
@@ -511,7 +538,8 @@ export function CreateCampaignWizard() {
 
     const uniqueSegments = useMemo(() => {
         const segments = new Set(validContacts.map(c => c.segment).filter(Boolean));
-        return Array.from(segments).filter(s => s !== 'Inactive');
+        // Only allow 'New' segment to be selectable individually as per user request
+        return Array.from(segments).filter(s => s === 'New' || s === 'new');
     }, [validContacts]);
 
     const recipientCount = useMemo(() => {
@@ -579,13 +607,27 @@ export function CreateCampaignWizard() {
                                             <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary bg-primary/5')}>
                                                 <Users className="w-8 h-8"/>
                                                 <span className="font-bold text-center">Todos os Contatos</span>
-                                                <span className="text-xs text-muted-foreground">{validContacts.filter(c => c.segment !== 'Inactive').length} contatos</span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    {contactsLoading ? (
+                                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                                    ) : (
+                                                        `${validContacts.filter(c => c.segment !== 'Inactive').length} contatos`
+                                                    )}
+                                                </span>
                                             </Label>
                                             {uniqueSegments.map(segment => (
                                                 <Label key={segment} onClick={() => setValue('contactSegment', segment, {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === segment && 'border-primary ring-2 ring-primary bg-primary/5')}>
                                                     <Star className="w-6 h-6"/>
-                                                    <span className="font-bold text-center">{segment}</span>
-                                                    <span className="text-xs text-muted-foreground">{validContacts.filter(c => c.segment === segment).length} contatos</span>
+                                                    <span className="font-bold text-center">
+                                                        {(segment === 'New' || segment === 'new') ? 'Novos Contatos' : segment}
+                                                    </span>
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {contactsLoading ? (
+                                                             <Loader2 className="h-3 w-3 animate-spin" />
+                                                        ) : (
+                                                            `${validContacts.filter(c => c.segment === segment).length} contatos`
+                                                        )}
+                                                    </span>
                                                 </Label>
                                             ))}
                                         </div>
@@ -619,7 +661,7 @@ export function CreateCampaignWizard() {
                                         Cronograma Estimado de Envio
                                     </CardTitle>
                                     <CardDescription>
-                                        Previsão baseada na velocidade média e limite de 300 msg/dia.
+                                        Previsão baseada na velocidade média e limite de {dailyLimit} msg/dia.
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent>

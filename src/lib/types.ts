@@ -32,4 +32,18 @@ export type Campaign = {
     failed?: number;
   };
   uazapiId?: string;
+  batchIds?: string[];
+  batches?: Record<string, {
+    id: string;
+    name: string;
+    scheduledAt: string;
+    status: string;
+    count: number;
+    stats?: {
+        sent?: number;
+        delivered?: number;
+        read?: number;
+        failed?: number;
+    }
+  }>;
 };
