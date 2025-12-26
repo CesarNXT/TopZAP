@@ -40,7 +40,7 @@ const formSchema = z.object({
   name: z.string().min(2, { message: 'O nome deve ter pelo menos 2 caracteres.' }),
   ddi: z.string().default('55'),
   phone: z.string().min(10, { message: 'O telefone deve ter pelo menos 10 caracteres.' }).max(11, { message: 'O telefone deve ter no máximo 11 caracteres.' }),
-  segment: z.enum(['VIP', 'New', 'Regular', 'Inactive']),
+  segment: z.enum(['New', 'Regular', 'Inactive']),
   birthday: z.date().optional(),
 });
 
@@ -124,7 +124,7 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
     let dataToSave: Partial<Contact> & { createdAt?: any } = {
         ...values,
         phone: fullPhone,
-        birthday: birthdayString || null,
+        birthday: birthdayString || undefined,
     };
     
     // Remove ddi from dataToSave as it is not part of Contact type (if strictly typed)
@@ -218,11 +218,11 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
                   name="segment"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Grupo</FormLabel>
+                      <FormLabel>Status</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Selecione um grupo" />
+                            <SelectValue placeholder="Selecione um status" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>

@@ -10,6 +10,11 @@ import {
 export async function handleOptimizeMessage(
   input: OptimizeMessageContentInput
 ): Promise<OptimizeMessageContentOutput> {
+  if (!process.env.GOOGLE_GENAI_API_KEY) {
+    console.error('GOOGLE_GENAI_API_KEY is not set in environment variables.');
+    throw new Error('Configuração de IA ausente (API Key). Contate o suporte.');
+  }
+
   try {
     const result = await optimizeMessageContent(input);
     if (!result) {

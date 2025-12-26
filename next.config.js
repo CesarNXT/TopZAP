@@ -48,6 +48,19 @@ const nextConfig = {
     ],
     unoptimized: true,
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '10mb',
+      allowedOrigins: ['localhost:3000', '*.ngrok-free.app'],
+    },
+    serverComponentsExternalPackages: [
+      'genkit',
+      '@genkit-ai/google-genai',
+      'require-in-the-middle',
+      '@opentelemetry/instrumentation',
+      '@opentelemetry/sdk-node',
+    ],
+  },
 };
 
 module.exports = nextConfig;

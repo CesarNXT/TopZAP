@@ -36,3 +36,19 @@ export async function deleteCampaignAction(userId: string, campaignId: string) {
     return { success: false, error: 'Erro interno ao excluir campanha.' };
   }
 }
+
+export async function getCampaignInteractionsAction(userId: string, campaignId: string) {
+  try {
+    const snapshot = await db.collection('users').doc(userId).collection('campaigns').doc(campaignId).collection('interactions').orderBy('createdAt', 'desc').get();
+    
+    const interactions = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    return { success: true, data: interactions };
+  } catch (error: any) {
+    console.error('Error fetching interactions:', error);
+    return { success: false, error: error.message };
+  }
+}

@@ -3,7 +3,7 @@ export type Contact = {
   userId: string;
   name: string;
   phone: string;
-  segment: 'Regular' | 'VIP' | 'Inactive' | 'New';
+  segment: 'Regular' | 'Inactive' | 'New';
   createdAt: any; // Can be string or Firestore Timestamp
   avatarUrl?: string;
   birthday?: string;
@@ -19,9 +19,10 @@ export type Campaign = {
   sentDate: string;
   startDate?: string;
   endDate?: string;
-  status: 'Sent' | 'Scheduled' | 'Draft' | 'Failed' | 'Sending' | 'Completed';
+  status: 'Sent' | 'Scheduled' | 'Draft' | 'Failed' | 'Sending' | 'Completed' | 'Paused';
   engagement: number;
   recipients: number;
+  count?: number;
   stats?: {
     sent?: number;
     delivered?: number;
@@ -30,4 +31,5 @@ export type Campaign = {
     blocked?: number;
     failed?: number;
   };
+  uazapiId?: string;
 };

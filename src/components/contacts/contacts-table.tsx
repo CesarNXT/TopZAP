@@ -26,11 +26,12 @@ import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2, UserPlus, User, Search } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useUser, useFirestore } from '@/firebase';
-import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, query, orderBy, limit, startAfter, getDocs, QueryDocumentSnapshot, where, QueryConstraint, writeBatch, documentId } from 'firebase/firestore';
 import { Checkbox } from '@/components/ui/checkbox';
 
 interface ContactsTableProps {
@@ -67,10 +68,13 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     const { user } = useUser();
     const firestore = useFirestore();
 
-    const [allContacts, setAllContacts] = React.useState<Contact[]>([]);
+    const [contacts, setContacts] = React.useState<Contact[]>([]);
     const [isLoading, setIsLoading] = React.useState(true);
-    const [lastDoc, setLastDoc] = React.useState<QueryDocumentSnapshot | null>(null);
-    const [hasMore, setHasMore] = React.useState(true);
+    const [page, setPage] = React.useState(0);
+    const [pageCursors, setPageCursors] = React.useState<QueryDocumentSnapshot[]>([]);
+    const [pagesCache, setPagesCache] = React.useState<Record<number, Contact[]>>({});
+    const [hasNextPage, setHasNextPage] = React.useState(false);
+    const [allContactsCache, setAllContactsCache] = React.useState<Contact[] | null>(null);
     
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -79,8 +83,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     const [rowSelection, setRowSelection] = React.useState({});
     const [isDeletingMultiple, setIsDeletingMultiple] = React.useState(false);
     
-    const tableContainerRef = React.useRef<HTMLDivElement>(null);
-    const [isFetchingMore, setIsFetchingMore] = React.useState(false);
+    const PAGE_SIZE = 50;
     
     const handleDeleteRequest = (contact: Contact) => {
       setContactToDelete(contact);
@@ -93,29 +96,30 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
         setIsDeletingMultiple(true);
         try {
-            const batch = writeBatch(firestore);
             const selectedIndices = Object.keys(rowSelection).map(Number);
-            // rowSelection keys are index (string) -> boolean
-            // But we need to map them to actual data. 
-            // table.getRowModel().rows contains the rows in current view.
-            // If we have pagination or infinite scroll, rowSelection might refer to rows across pages if configured?
-            // TanStack table default rowSelection uses row.id if getRowId is provided, or index if not.
-            // We didn't provide getRowId, so it uses index. 
-            // BUT, since we have infinite scroll appending to allContacts, indices match allContacts array.
             
             const selectedRowIds = Object.keys(rowSelection).filter(k => rowSelection[k as keyof typeof rowSelection]);
-            const contactsToDelete = selectedRowIds.map(index => allContacts[parseInt(index)]).filter(Boolean);
+            const contactsToDelete = selectedRowIds.map(index => contacts[parseInt(index)]).filter(Boolean);
             
-            contactsToDelete.forEach(contact => {
-                const docRef = doc(firestore, 'users', user.uid, 'contacts', contact.id);
-                batch.delete(docRef);
-            });
+            const chunkSize = 500;
+            for (let i = 0; i < contactsToDelete.length; i += chunkSize) {
+                const chunk = contactsToDelete.slice(i, i + chunkSize);
+                const batch = writeBatch(firestore);
+                chunk.forEach(contact => {
+                    const docRef = doc(firestore, 'users', user.uid, 'contacts', contact.id);
+                    batch.delete(docRef);
+                });
+                await batch.commit();
+            }
 
-            await batch.commit();
-            
             // Remove from local state
             const deletedIds = new Set(contactsToDelete.map(c => c.id));
-            setAllContacts(prev => prev.filter(c => !deletedIds.has(c.id)));
+            setContacts(prev => prev.filter(c => !deletedIds.has(c.id)));
+            // Also update allContactsCache if it exists
+            if (allContactsCache) {
+                setAllContactsCache(prev => prev ? prev.filter(c => !deletedIds.has(c.id)) : null);
+            }
+
             setRowSelection({});
             toast({ title: "Contatos removidos", description: `${contactsToDelete.length} contatos foram removidos.` });
             onDelete();
@@ -126,6 +130,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
             setIsDeletingMultiple(false);
         }
     };
+
 
     const columns: ColumnDef<Contact>[] = [
       {
@@ -170,11 +175,10 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
       },
       {
         accessorKey: "segment",
-        header: "Grupo",
+        header: "Status",
         cell: ({ row }) => {
           const segment = row.getValue("segment") as string;
           const segmentMap = {
-            'VIP': { label: 'Cliente VIP', className: 'border-yellow-500/80 text-yellow-600 bg-yellow-500/10' },
             'New': { label: 'Novo', className: 'border-blue-500/80 text-blue-600 bg-blue-500/10' },
             'Regular': { label: 'Cliente', className: 'border-green-500/80 text-green-600 bg-green-500/10' },
             'Inactive': { label: 'Bloqueado', className: 'border-gray-400 text-gray-500 bg-gray-500/10' },
@@ -182,7 +186,6 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
           const currentSegment = segmentMap[segment as keyof typeof segmentMap] || { label: segment, className: '' };
           return (
               <Badge variant="outline" className={cn('font-medium', currentSegment.className)}>
-                {segment === 'VIP' && <Star className='mr-1 h-3 w-3' />}
                 {currentSegment.label}
               </Badge>
           )
@@ -211,7 +214,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     ];
 
   const table = useReactTable({
-    data: allContacts,
+    data: contacts,
     columns,
     getCoreRowModel: getCoreRowModel(),
     onSortingChange: setSorting,
@@ -232,122 +235,231 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
   const nameFilter = (table.getColumn("name")?.getFilterValue() as string) ?? "";
 
-  const resetAndLoad = React.useCallback((showLoader = true) => {
-      setAllContacts([]);
-      setRowSelection({});
-      setLastDoc(null);
-      setHasMore(true);
-      if(showLoader) setIsLoading(true);
-  }, []);
-
-  React.useEffect(() => {
-      if(!nameFilter) {
-        resetAndLoad();
-      }
-  }, [nameFilter, resetAndLoad]);
-  
-  React.useEffect(() => {
-      resetAndLoad();
-  }, [filter, importCounter, user]);
-
-  const loadMoreContacts = React.useCallback(async (isSearch = false) => {
-      if (!user || (!isSearch && !hasMore) || isFetchingMore) return;
+  const loadContacts = React.useCallback(async () => {
+      if (!user) return;
       
-      setIsFetchingMore(true);
-      if (!lastDoc && !isSearch) setIsLoading(true);
+      // Check cache first
+      if (pagesCache[page]) {
+          setContacts(pagesCache[page]);
+          setHasNextPage(pagesCache[page].length >= PAGE_SIZE);
+          return;
+      }
+
+      setIsLoading(true);
 
       const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
       let queries: QueryConstraint[] = [];
 
-      if (filter !== 'all') {
-          const segmentMap = {
-              'vip': 'VIP',
-              'blocked': 'Inactive',
-          };
-          queries.push(where('segment', '==', segmentMap[filter as keyof typeof segmentMap]));
-      }
-      
+      // Multi-query search implementation replaced by Client-Side Search for "Contains" support
       if (nameFilter) {
-          const searchLower = nameFilter.toLowerCase();
-          const searchCapitalized = nameFilter.charAt(0).toUpperCase() + nameFilter.slice(1).toLowerCase();
+        setIsLoading(true);
+        try {
+            let searchSource = allContactsCache;
 
-          queries.push(where('name', '>=', nameFilter));
-          queries.push(where('name', '<=', nameFilter + '\uf8ff'));
+            // If we haven't fetched all contacts yet, or cache is empty, do it now
+            if (!searchSource || searchSource.length === 0) {
+                 // Notify user that we are loading a large dataset
+                 toast({ title: "Indexando contatos...", description: "Carregando sua lista para habilitar a busca avançada." });
+
+                 // Fetch all contacts in batches to avoid Firebase 10k limit and ensure we find the contact
+                 let allDocs: any[] = [];
+                 let lastDoc = null;
+                 let hasMore = true;
+                 const BATCH_SIZE = 5000; // Safe batch size under 10k limit
+                 const MAX_DOCS = 100000; // Increased limit for larger lists
+
+                 while (hasMore && allDocs.length < MAX_DOCS) {
+                     // Explicitly order by documentId for stable pagination
+                     let constraints: QueryConstraint[] = [orderBy(documentId()), limit(BATCH_SIZE)];
+                     
+                     if (lastDoc) {
+                         constraints.push(startAfter(lastDoc));
+                     }
+                     
+                     const q = query(contactsRef, ...constraints);
+                     
+                     const snapshot = await getDocs(q);
+                     
+                     if (snapshot.empty) {
+                         hasMore = false;
+                     } else {
+                         allDocs = [...allDocs, ...snapshot.docs];
+                         lastDoc = snapshot.docs[snapshot.docs.length - 1];
+                         
+                         // If we got fewer than requested, we reached the end
+                         if (snapshot.docs.length < BATCH_SIZE) {
+                             hasMore = false;
+                         }
+                     }
+                 }
+
+                 searchSource = allDocs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
+                 
+                 // Sort by name in memory
+                 searchSource.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                 
+                 setAllContactsCache(searchSource);
+                 toast({ title: "Busca Pronta", description: `${searchSource.length} contatos indexados.` });
+            }
+
+            // Perform client-side filtering
+            const lowerFilter = nameFilter.toLowerCase();
+            const rawFilter = nameFilter.replace(/\D/g, '');
+            
+            let filtered = searchSource.filter(contact => {
+                const contactName = (contact.name || '').toLowerCase();
+                const nameMatch = contactName.includes(lowerFilter);
+                
+                // For phone search:
+                // 1. Check if the raw input (only digits) is contained in the raw phone number (only digits)
+                // 2. OR check if the user typed text matches the formatted phone
+                const phoneStr = String(contact.phone || '');
+                const contactRawPhone = phoneStr.replace(/\D/g, '');
+                
+                const phoneMatch = rawFilter 
+                    ? contactRawPhone.includes(rawFilter) 
+                    : phoneStr.includes(nameFilter); // Fallback for formatted input like (31)
+
+                return nameMatch || phoneMatch;
+            });
+
+            // Apply segment filter in memory if active
+            if (filter !== 'all') {
+                const segmentMap: Record<string, string> = {
+                    'blocked': 'Inactive',
+                    'inactive': 'Inactive',
+                    'new': 'New',
+                    'regular': 'Regular'
+                };
+                const mappedSegment = segmentMap[filter] || filter;
+                filtered = filtered.filter(c => c.segment === mappedSegment);
+            }
+
+            setContacts(filtered);
+            setHasNextPage(false); // Pagination disabled in search mode
+            setPagesCache({}); 
+
+            // Toast to debug/confirm search scope if it's the first time searching
+            if (!allContactsCache) {
+                 console.log(`Loaded ${searchSource.length} contacts for search.`);
+            } 
+
+        } catch (error: any) {
+            console.error("Search error:", error);
+            toast({ variant: 'destructive', title: "Erro na busca", description: "Falha ao buscar contatos." });
+        } finally {
+            setIsLoading(false);
+        }
+        return; // Exit early for search mode
+      }
+
+      // Standard Load (No Search Filter)
+      if (filter !== 'all') {
+          // If nameFilter is present, we prioritize name search logic and do client-side filtering for segment
+          // to avoid composite index requirement.
+          if (!nameFilter) {
+              const segmentMap: Record<string, string> = {
+                  'blocked': 'Inactive',
+                  'inactive': 'Inactive',
+                  'new': 'New',
+                  'regular': 'Regular'
+              };
+              const mappedSegment = segmentMap[filter] || filter; 
+              queries.push(where('segment', '==', mappedSegment));
+          }
       }
       
-      queries.push(orderBy('name'));
-
-      if (lastDoc && !isSearch) {
-          queries.push(startAfter(lastDoc));
+      // Standard ordering
+      if (filter === 'all') {
+          queries.push(orderBy('name'));
       }
       
-      queries.push(limit(50));
+      // Pagination logic
+      if (page > 0) {
+          const cursor = pageCursors[page - 1];
+          if (cursor) {
+              queries.push(startAfter(cursor));
+          }
+      }
+      
+      queries.push(limit(PAGE_SIZE));
 
       const q = query(contactsRef, ...queries);
 
       try {
           const documentSnapshots = await getDocs(q);
-          const newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
+          let newContacts = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() } as Contact));
 
-          setAllContacts(prev => {
-            if (isSearch || !lastDoc) return newContacts;
-            const existingIds = new Set(prev.map(c => c.id));
-            const uniqueNewContacts = newContacts.filter(c => !existingIds.has(c.id));
-            return [...prev, ...uniqueNewContacts];
-          });
-         
-          const lastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
-          setLastDoc(lastVisible);
-          
-          setHasMore(documentSnapshots.docs.length >= 50);
-
-      } catch (error) {
-          console.error("Error fetching contacts:", error);
-          toast({ variant: 'destructive', title: "Erro", description: "Não foi possível carregar os contatos." });
-      } finally {
-          setIsLoading(false);
-          setIsFetchingMore(false);
-      }
-  }, [user, firestore, lastDoc, hasMore, isFetchingMore, toast, filter, nameFilter]);
-  
-  React.useEffect(() => {
-    const handler = setTimeout(() => {
-      if (nameFilter) {
-        setAllContacts([]);
-        setLastDoc(null);
-        setHasMore(true);
-        loadMoreContacts(true);
-      }
-    }, 300);
-
-    return () => {
-        clearTimeout(handler);
-    };
-  }, [nameFilter, loadMoreContacts]);
-  
-  React.useEffect(() => {
-      if (isLoading && !nameFilter) {
-          loadMoreContacts();
-      }
-  }, [isLoading, nameFilter, loadMoreContacts]);
-
-
-   const handleScroll = React.useCallback(() => {
-      if (nameFilter) return; 
-      const container = tableContainerRef.current;
-      if (container) {
-          const { scrollTop, scrollHeight, clientHeight } = container;
-          if (scrollHeight - scrollTop - clientHeight < 200 && !isFetchingMore && hasMore) {
-              loadMoreContacts();
+          // If we have both nameFilter and segment filter, we did NOT apply segment filter in query
+          // So we must apply it in memory here
+          if (filter !== 'all' && nameFilter) {
+              const segmentMap: Record<string, string> = {
+                  'blocked': 'Inactive',
+                  'inactive': 'Inactive',
+                  'new': 'New',
+                  'regular': 'Regular'
+              };
+              const mappedSegment = segmentMap[filter] || filter;
+              newContacts = newContacts.filter(c => c.segment === mappedSegment);
           }
+
+          setContacts(newContacts);
+          setPagesCache(prev => ({...prev, [page]: newContacts}));
+          
+          // Check if there are more results
+          setHasNextPage(documentSnapshots.docs.length >= PAGE_SIZE);
+
+          // Update cursors if we loaded a full page
+          if (documentSnapshots.docs.length > 0) {
+             const lastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
+             setPageCursors(prev => {
+                 const newCursors = [...prev];
+                 newCursors[page] = lastVisible;
+                 return newCursors;
+             });
+          }
+
+      } catch (error: any) {
+            console.error("Error fetching contacts:", error);
+            if (error?.message?.includes('offline') || error?.code === 'unavailable') {
+                 toast({ variant: 'warning', title: "Conexão Instável", description: "Verifique sua internet. Tentando reconectar..." });
+            } else {
+                 toast({ variant: 'destructive', title: "Erro", description: "Não foi possível carregar os contatos." });
+            }
+        } finally {
+          setIsLoading(false);
       }
-  }, [loadMoreContacts, isFetchingMore, hasMore, nameFilter]);
+  }, [user, firestore, page, filter, nameFilter, pageCursors, toast, pagesCache]);
+  
+  // Reset pagination when filters change
+  React.useEffect(() => {
+      setPage(0);
+      setPageCursors([]);
+      setContacts([]);
+      setPagesCache({});
+      // Note: We intentionally do NOT clear allContactsCache here to reuse it during search typing
+  }, [filter, nameFilter, importCounter]);
+
+  // Clear allContactsCache only when explicit refresh actions happen
+  React.useEffect(() => {
+      setAllContactsCache(null);
+  }, [importCounter]);
+
+  // Load contacts when page or filters change
+  React.useEffect(() => {
+    // Debounce load if nameFilter is present to avoid rapid fire queries
+    const timeoutId = setTimeout(() => {
+        loadContacts();
+    }, nameFilter ? 300 : 0);
+
+    return () => clearTimeout(timeoutId);
+  }, [loadContacts]);
 
   const handleDeleteConfirm = async () => {
       if (contactToDelete && user) {
           try {
               await deleteDoc(doc(firestore, 'users', user.uid, 'contacts', contactToDelete.id));
-              setAllContacts(prev => prev.filter(c => c.id !== contactToDelete.id));
+              setContacts(prev => prev.filter(c => c.id !== contactToDelete.id));
               toast({ title: "Contato removido", description: `${contactToDelete.name} foi removido da sua lista.` });
               onDelete();
           } catch (error) {
@@ -361,26 +473,60 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
   return (
     <>
-        <div className="flex items-center justify-between py-4">
-            <Input
-                placeholder="Filtrar por nome..."
-                value={nameFilter}
-                onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
-                className="max-w-sm"
-            />
+        <div className="flex items-center justify-between py-4 gap-4">
+            <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                    placeholder="Filtrar por nome ou telefone..."
+                    value={nameFilter}
+                    onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
+                    className="pl-9"
+                />
+            </div>
+            
             <div className="flex items-center gap-2">
-                <Button variant={filter === 'all' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('all')}><Users className='mr-2 h-4 w-4'/>Todos</Button>
-                <Button variant={filter === 'blocked' ? 'secondary' : 'outline'} size="sm" onClick={() => setFilter('blocked')}><Ban className='mr-2 h-4 w-4'/>Só Bloqueados</Button>
+                <Select value={filter} onValueChange={setFilter}>
+                    <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">
+                            <div className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                <span>Todos</span>
+                            </div>
+                        </SelectItem>
+                        <SelectItem value="new">
+                            <div className="flex items-center gap-2 text-blue-600">
+                                <UserPlus className="h-4 w-4" />
+                                <span>Novos</span>
+                            </div>
+                        </SelectItem>
+                        <SelectItem value="regular">
+                            <div className="flex items-center gap-2 text-green-600">
+                                <User className="h-4 w-4" />
+                                <span>Clientes</span>
+                            </div>
+                        </SelectItem>
+                        <SelectItem value="inactive">
+                            <div className="flex items-center gap-2 text-gray-600">
+                                <Ban className="h-4 w-4" />
+                                <span>Bloqueados</span>
+                            </div>
+                        </SelectItem>
+                    </SelectContent>
+                </Select>
+
                 {filter !== 'all' && (
-                     <Button variant="ghost" size="sm" onClick={() => setFilter('all')}><FilterX className='mr-2 h-4 w-4' />Limpar</Button>
+                     <Button variant="ghost" size="icon" onClick={() => setFilter('all')} title="Limpar Filtro">
+                        <FilterX className='h-4 w-4' />
+                     </Button>
                 )}
             </div>
         </div>
       <div 
         className="rounded-md border overflow-y-auto relative" 
-        style={{ height: 'calc(100vh - 350px)' }}
-        ref={tableContainerRef}
-        onScroll={handleScroll}
+        style={{ height: 'calc(100vh - 400px)' }}
       >
         <Table>
           <TableHeader className="sticky top-0 bg-background z-10">
@@ -438,24 +584,30 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 </TableCell>
               </TableRow>
             )}
-            {isFetchingMore && !nameFilter &&(
-                <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center">
-                        <div className="flex justify-center items-center p-4">
-                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                    </TableCell>
-                </TableRow>
-            )}
-             {!hasMore && allContacts.length > 0 && !nameFilter && (
-                <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center text-muted-foreground p-4">
-                        Fim da lista.
-                    </TableCell>
-                </TableRow>
-            )}
           </TableBody>
         </Table>
+      </div>
+
+      <div className="flex items-center justify-end space-x-2 py-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page === 0 || isLoading}
+        >
+          Anterior
+        </Button>
+        <div className="text-sm text-muted-foreground">
+            Página {page + 1}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={!hasNextPage || isLoading}
+        >
+          Próximo
+        </Button>
       </div>
 
       <AlertDialog open={!!contactToDelete} onOpenChange={() => setContactToDelete(null)}>

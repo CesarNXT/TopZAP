@@ -92,7 +92,7 @@ export default function ContactsPage() {
                 phone: dataToSave.phone || '',
                 segment: dataToSave.segment || 'New',
                 createdAt: new Date(),
-                birthday: dataToSave.birthday || null // Ensure no undefined value
+                birthday: dataToSave.birthday || undefined // Ensure no undefined value
             };
             await addDoc(collection(firestore, 'users', user.uid, 'contacts'), newContact);
             toast({ title: "Contato criado!", description: `${newContact.name} foi adicionado à sua lista.` });
@@ -112,23 +112,28 @@ export default function ContactsPage() {
         return;
     }
     
-    const batch = writeBatch(firestore);
-    
-    contacts.forEach(contactData => {
-        const formattedPhone = formatPhoneNumberForDB(contactData.phone);
-        const newContact: Omit<Contact, 'id' | 'avatarUrl'> = {
-            userId: user.uid,
-            name: contactData.name || '',
-            phone: formattedPhone,
-            segment: 'New',
-            createdAt: new Date(),
-        };
-        const contactRef = doc(collection(firestore, 'users', user.uid, 'contacts'));
-        batch.set(contactRef, newContact);
-    });
-
     try {
-        await batch.commit();
+        const chunkSize = 500;
+        for (let i = 0; i < contacts.length; i += chunkSize) {
+            const chunk = contacts.slice(i, i + chunkSize);
+            const batch = writeBatch(firestore);
+            
+            chunk.forEach(contactData => {
+                const formattedPhone = formatPhoneNumberForDB(contactData.phone);
+                const newContact: Omit<Contact, 'id' | 'avatarUrl'> = {
+                    userId: user.uid,
+                    name: contactData.name || '',
+                    phone: formattedPhone,
+                    segment: 'Regular',
+                    createdAt: new Date(),
+                };
+                const contactRef = doc(collection(firestore, 'users', user.uid, 'contacts'));
+                batch.set(contactRef, newContact);
+            });
+            
+            await batch.commit();
+        }
+
         toast({
             title: "Contatos importados!",
             description: `${contacts.length} novos contatos foram adicionados com sucesso.`
@@ -151,12 +156,17 @@ export default function ContactsPage() {
         const q = query(contactsCollectionRef);
         const querySnapshot = await getDocs(q);
         
-        const batch = writeBatch(firestore);
-        querySnapshot.forEach((doc) => {
-            batch.delete(doc.ref);
-        });
+        const docs = querySnapshot.docs;
+        const chunkSize = 500;
         
-        await batch.commit();
+        for (let i = 0; i < docs.length; i += chunkSize) {
+            const chunk = docs.slice(i, i + chunkSize);
+            const batch = writeBatch(firestore);
+            chunk.forEach((doc) => {
+                batch.delete(doc.ref);
+            });
+            await batch.commit();
+        }
         
         toast({ title: "Sucesso!", description: "Todos os contatos foram excluídos." });
         setImportCounter(c => c + 1); // Trigger refetch

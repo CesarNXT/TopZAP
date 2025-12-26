@@ -109,13 +109,14 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                             <FormControl>
                                 <Input 
                                     type="number" 
-                                    min={1}
+                                    min={300}
                                     {...field} 
-                                    onChange={e => field.onChange(parseInt(e.target.value) || 0)} 
+                                    disabled
+                                    value={300}
                                 />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Máximo de mensagens por dia. O restante será agendado para os dias seguintes.
+                                Fixo em 300 mensagens por dia para segurança.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
@@ -129,27 +130,46 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                         <FormItem>
                             <FormLabel>Data de Início</FormLabel>
                             <FormControl>
-                                <Input type="date" {...field} min={new Date().toISOString().split('T')[0]} />
+                                <Input type="date" {...field} value={field.value || ''} min={new Date().toISOString().split('T')[0]} />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Quando começar a enviar. (Horário padrão: 08:00)
+                                Quando começar a enviar.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
                     )}
                 />
-
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                 <FormField
                     control={form.control}
-                    name="endDate"
+                    name="startHour"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Data Limite (Opcional)</FormLabel>
+                            <FormLabel>Horário de Início (1º Dia)</FormLabel>
                             <FormControl>
-                                <Input type="date" {...field} min={new Date().toISOString().split('T')[0]} />
+                                <Input type="time" {...field} value={field.value || ''} />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Se atingida, o envio dos lotes restantes será cancelado.
+                                Horário para iniciar o envio do primeiro lote.
+                            </FormDescription>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                />
+                
+                 <FormField
+                    control={form.control}
+                    name="nextDaysStartHour"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>Horário de Início (Próximos Dias)</FormLabel>
+                            <FormControl>
+                                <Input type="time" {...field} value={field.value || ''} />
+                            </FormControl>
+                            <FormDescription className="text-xs">
+                                Horário para iniciar os lotes dos dias seguintes.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>

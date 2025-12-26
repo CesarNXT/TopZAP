@@ -15,8 +15,10 @@ import {
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import {
-  Loader2, Sparkles, AlertTriangle, Users, Star, Cake, ShieldX, ArrowLeft, Send
+  Loader2, Sparkles, AlertTriangle, Users, Star, Cake, ShieldX, ArrowLeft, Send, Zap, Rocket, CalendarClock, Clock, Calendar
 } from 'lucide-react';
+import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { handleOptimizeMessage } from '@/app/actions';
@@ -41,10 +43,11 @@ import { SpeedSelector } from './speed-selector';
 import { v4 as uuidv4 } from 'uuid';
 import type { Contact, Campaign } from '@/lib/types';
 import { useUser, useFirestore, useCollection } from '@/firebase';
-import { collection, addDoc, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
 
-import { createAdvancedCampaignForUser } from '@/app/actions/whatsapp-actions';
+import { createSimpleCampaignForUser, createAdvancedCampaignForUser } from '@/app/actions/whatsapp-actions';
+import { uploadToCatbox } from '@/app/actions/upload-actions';
 
 const formSchema = z.object({
   name: z.string().min(5, { message: 'O nome da campanha deve ter pelo menos 5 caracteres.' }),
@@ -59,17 +62,28 @@ const formSchema = z.object({
     message: 'Você deve aceitar os termos de responsabilidade para continuar.',
   }),
   media: z.any().optional(),
-  dailyLimit: z.number().min(1, { message: 'Limite diário deve ser pelo menos 1.' }).default(300),
+  dailyLimit: z.number().default(300),
   startDate: z.string().optional(),
+  startHour: z.string().default("08:00"),
+  nextDaysStartHour: z.string().default("08:00"),
 }).refine(data => data.message || data.media, {
     message: "A campanha precisa ter uma mensagem ou um anexo de mídia.",
     path: ['message'],
+}).refine((data) => {
+    if (!data.startDate || !data.startHour) return true;
+    const start = new Date(`${data.startDate}T${data.startHour}:00`);
+    if (isNaN(start.getTime())) return true;
+    // Allow 2 min tolerance for "just now" processing time
+    return start.getTime() > Date.now() - 2 * 60 * 1000;
+}, {
+    message: "O horário de início não pode ser no passado. Ajuste para um horário futuro.",
+    path: ["startHour"],
 });
 
 const steps = [
     { id: '01', name: 'Destinatários', fields: ['name', 'contactSegment'] },
     { id: '02', name: 'Mensagem', fields: ['message', 'media'] },
-    { id: '03', name: 'Velocidade', fields: ['sendSpeed'] },
+    { id: '03', name: 'Velocidade', fields: ['sendSpeed', 'startDate', 'startHour', 'nextDaysStartHour'] },
     { id: '04', name: 'Confirmar e Enviar' }
 ]
 
@@ -89,6 +103,7 @@ export function CreateCampaignWizard() {
     }, [firestore, user]);
 
     const { data: contacts } = useCollection<Contact>(contactsQuery);
+    const validContacts = contacts || [];
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -99,6 +114,9 @@ export function CreateCampaignWizard() {
             sendSpeed: 'safe',
             liabilityAccepted: false,
             dailyLimit: 300,
+            startDate: format(new Date(), 'yyyy-MM-dd'),
+            startHour: "08:00",
+            nextDaysStartHour: "08:00",
         },
     });
 
@@ -110,6 +128,85 @@ export function CreateCampaignWizard() {
     const buttons = watch('buttons');
     const dailyLimit = watch('dailyLimit');
     const startDate = watch('startDate');
+    const startHour = watch('startHour');
+    const nextDaysStartHour = watch('nextDaysStartHour');
+
+    // Calculate Estimations
+    const estimation = useMemo(() => {
+        if (!contacts || !contactSegment) return null;
+        
+        let targetContacts = [];
+        if (contactSegment === 'all') {
+            targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
+        } else {
+            targetContacts = validContacts.filter(c => c.segment === contactSegment);
+        }
+        
+        const totalContacts = targetContacts.length;
+        if (totalContacts === 0) return null;
+
+        const limit = 300;
+        const totalDays = Math.ceil(totalContacts / limit);
+        
+        // Speed Calculation (Average seconds per message)
+        let avgSecondsPerMsg = 150; // Safe (120-180s)
+        if (sendSpeed === 'fast') avgSecondsPerMsg = 90; // Normal (60-120s)
+        if (sendSpeed === 'turbo') avgSecondsPerMsg = 70; // Turbo (60-80s)
+
+        const batches = [];
+        // Base date calculation
+        let currentBatchDate = startDate ? new Date(startDate + 'T00:00:00') : new Date();
+        
+        // Parse Start Hours
+        const parseTime = (time: string) => {
+             const [h, m] = (time || "08:00").split(':').map(Number);
+             return [h || 0, m || 0];
+        };
+        const [startH, startM] = parseTime(startHour);
+        const [nextH, nextM] = parseTime(nextDaysStartHour);
+
+        // Adjust currentBatchDate to the correct start time for the first day
+        currentBatchDate.setHours(startH, startM, 0, 0);
+        
+        for (let i = 0; i < totalDays; i++) {
+            const isFirstDay = i === 0;
+            const batchSize = Math.min(limit, totalContacts - (i * limit));
+            const durationSeconds = batchSize * avgSecondsPerMsg;
+            
+            // Determine start time for this batch
+            let batchStart = new Date(currentBatchDate);
+            if (!isFirstDay) {
+                // For subsequent days, force the time to nextDaysStartHour
+                // currentBatchDate is already incremented by days, now set hours
+                batchStart.setHours(nextH, nextM, 0, 0);
+            } else {
+                 batchStart.setHours(startH, startM, 0, 0);
+            }
+
+            const batchEnd = new Date(batchStart.getTime() + (durationSeconds * 1000));
+            
+            // Check for warning: does it end too late? (e.g. after 22:00)
+            const endHour = batchEnd.getHours();
+            const isLate = endHour >= 22 || endHour < 6; // Warning if ends after 10PM or before 6AM (next day)
+            const endsNextDay = batchEnd.getDate() !== batchStart.getDate();
+
+            batches.push({
+                day: i + 1,
+                date: batchStart,
+                count: batchSize,
+                endTime: batchEnd,
+                duration: durationSeconds,
+                isLate,
+                endsNextDay
+            });
+            
+            // Move base date to next day for the loop
+            currentBatchDate.setDate(currentBatchDate.getDate() + 1);
+        }
+
+        return batches;
+    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, nextDaysStartHour]);
+
 
     const next = async () => {
         const fields = steps[currentStep].fields;
@@ -145,62 +242,84 @@ export function CreateCampaignWizard() {
         const messagesToSend: any[] = [];
         if (values.media) {
             try {
-                const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.readAsDataURL(file);
-                    reader.onload = () => resolve(reader.result as string);
-                    reader.onerror = reject;
-                });
-                const base64 = await toBase64(values.media);
+                // Upload to Catbox
+                const formData = new FormData();
+                formData.append('reqtype', 'fileupload');
+                formData.append('fileToUpload', values.media);
+                
+                const uploadResult = await uploadToCatbox(formData);
+                if (uploadResult.error) {
+                    throw new Error(uploadResult.error);
+                }
+                
+                const mediaUrl = uploadResult.url;
                 
                 if (values.media.type.startsWith('image/')) {
                     messagesToSend.push({
-                        image: base64,
+                        image: mediaUrl,
                         caption: values.message || " ",
-                        type: 'button' // Hint for whatsapp-actions
+                        type: 'button', // Hint for whatsapp-actions
+                        buttons: values.buttons // Attach buttons
                     });
                 } else if (values.media.type.startsWith('video/')) {
                      messagesToSend.push({
-                        video: base64,
+                        video: mediaUrl,
                         caption: values.message || " ",
-                        type: 'button'
+                        type: 'button',
+                        buttons: values.buttons // Attach buttons
                     });
                 } else if (values.media.type.startsWith('audio/')) {
                     messagesToSend.push({
-                        audio: base64,
+                        audio: mediaUrl,
                         type: 'ptt' // Force PTT as requested
                     });
                      // If there's a text message with audio, we might need to send it separately or as caption?
                      // PTT usually doesn't have caption. 
-                     // If user typed a message, we should send it as text after PTT.
-                     if (values.message) {
-                         messagesToSend.push(values.message);
+                     // If user typed a message OR has buttons, we should send it as text after PTT.
+                     if (values.message || (values.buttons && values.buttons.length > 0)) {
+                         messagesToSend.push({
+                             text: values.message || "Selecione uma opção:",
+                             buttons: values.buttons,
+                             type: 'button'
+                         });
                      }
                 } else {
                     // Document or other
-                    // Documents usually don't support buttons in the same message in some APIs
-                    // But we'll try to send it as text + button if we can't attach
-                    // or just send document. 
-                    // Let's try sending as object and let whatsapp-actions handle it
                     messagesToSend.push({
-                        document: base64,
+                        document: mediaUrl,
                         fileName: values.media.name,
-                        caption: values.message || " "
+                        caption: values.message || " ",
+                        buttons: values.buttons // Attach buttons
                     });
                 }
             } catch (e) {
-                console.error("File read error", e);
-                toast({ variant: "destructive", title: "Erro", description: "Falha ao processar arquivo de mídia." });
+                console.error("File upload error", e);
+                toast({ variant: "destructive", title: "Erro", description: "Falha ao processar arquivo de mídia (Catbox)." });
                 setIsSubmitting(false);
                 return;
             }
         } else if (values.message) {
-            messagesToSend.push(values.message);
+            // Text only
+            if (values.buttons && values.buttons.length > 0) {
+                 messagesToSend.push({
+                     text: values.message,
+                     buttons: values.buttons,
+                     type: 'button'
+                 });
+            } else {
+                messagesToSend.push(values.message);
+            }
         }
 
         // Get active phones
-        const activeContacts = validContacts.filter(c => c.segment !== 'Inactive');
-        const phones = activeContacts.map(c => c.phone).filter(Boolean);
+        let targetContacts = validContacts;
+        if (values.contactSegment === 'all') {
+            targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
+        } else {
+            targetContacts = validContacts.filter(c => c.segment === values.contactSegment);
+        }
+
+        const phones = targetContacts.map(c => c.phone).filter(Boolean);
 
         if (phones.length === 0) {
             toast({ variant: "destructive", title: "Erro", description: "Nenhum contato válido encontrado para enviar." });
@@ -210,7 +329,7 @@ export function CreateCampaignWizard() {
 
         // Call Server Action to Send
         // Batching Logic for Daily Limits
-        const limit = values.dailyLimit || 300;
+        const limit = 300; // Fixed daily limit
         const totalContacts = phones.length;
         const batches = [];
         
@@ -218,67 +337,76 @@ export function CreateCampaignWizard() {
             batches.push(phones.slice(i, i + limit));
         }
 
-        const baseDate = values.startDate ? new Date(values.startDate + 'T00:00:00') : new Date();
-        const endDateLimit = values.endDate ? new Date(values.endDate + 'T23:59:59') : null;
-
-        // If user didn't pick a time, assume start as soon as possible (subject to window)
-        // If user picked a date but no time, we might default to 08:00 or now.
-        // For simplicity, let's assume startDate includes time if provided, or we construct it.
-        // But the input type="date" only gives YYYY-MM-DD. We should default to 08:00 if future, or max(08:00, now) if today.
-        
-        let currentDate = new Date(baseDate);
-        
-        // Helper to adjust date to next valid window (08:00 - 19:00)
-        const adjustToWindow = (date: Date) => {
-            const startHour = 8;
-            const endHour = 19;
-            
-            // If it's past 19:00, move to tomorrow 08:00
-            if (date.getHours() >= endHour) {
-                date.setDate(date.getDate() + 1);
-                date.setHours(startHour, 0, 0, 0);
-            }
-            // If it's before 08:00, move to today 08:00
-            else if (date.getHours() < startHour) {
-                date.setHours(startHour, 0, 0, 0);
-            }
-            
-            return date;
+        // Parse Start Hours
+        const parseTime = (time: string) => {
+             const [h, m] = (time || "08:00").split(':').map(Number);
+             return [h || 0, m || 0];
         };
+        const [startH, startM] = parseTime(values.startHour);
+        const [nextH, nextM] = parseTime(values.nextDaysStartHour);
 
-        currentDate = adjustToWindow(currentDate);
+        // Base date calculation
+        let currentBatchDate = values.startDate ? new Date(values.startDate + 'T00:00:00') : new Date();
+        
+        // Adjust first day time
+        currentBatchDate.setHours(startH, startM, 0, 0);
+
+        // Validation: Ensure start time is not in the past
+        if (currentBatchDate.getTime() < Date.now() - 5 * 60 * 1000) { // 5 min tolerance
+            toast({ variant: "destructive", title: "Horário Inválido", description: "O horário de início não pode ser no passado. Por favor, ajuste o horário." });
+            setIsSubmitting(false);
+            return;
+        }
 
         let successCount = 0;
         let lastDocRef = null;
 
         for (let i = 0; i < batches.length; i++) {
-            // Check End Date Limit
-            if (endDateLimit && currentDate > endDateLimit) {
-                toast({ 
-                    title: "Limite de Data Atingido", 
-                    description: `Os lotes restantes foram ignorados pois excedem a data limite de ${endDateLimit.toLocaleDateString()}.` 
-                });
-                break;
-            }
-
             const batchPhones = batches[i];
             const batchIndex = i + 1;
             const isMultiBatch = batches.length > 1;
             
-            // Calculate scheduled timestamp (seconds)
-            const scheduledFor = Math.floor(currentDate.getTime() / 1000);
+             // Set time for current batch
+            let batchDate = new Date(currentBatchDate);
+            if (i > 0) {
+                 // For subsequent batches (days), use nextDaysStartHour
+                 // currentBatchDate is already incremented by days (at end of loop), now set hours
+                 batchDate.setHours(nextH, nextM, 0, 0);
+            } else {
+                 batchDate.setHours(startH, startM, 0, 0);
+            }
+            
+            // Calculate scheduled timestamp (milliseconds)
+            const scheduledFor = batchDate.getTime();
             
             const batchName = isMultiBatch ? `${values.name} (Dia ${batchIndex})` : values.name;
 
-            const sendResult = await createAdvancedCampaignForUser(
-                user.uid, 
-                values.sendSpeed as any, 
-                messagesToSend, 
-                batchPhones, 
-                undefined, 
-                scheduledFor, 
-                values.buttons
-            );
+            let sendResult;
+
+            // Use Simple Campaign endpoint if we have a single message (User preference/Reliability)
+            if (messagesToSend.length === 1) {
+                console.log(`[Wizard] Using Simple Campaign for '${batchName}'`);
+                sendResult = await createSimpleCampaignForUser(
+                    user.uid,
+                    batchName,
+                    values.sendSpeed as any,
+                    messagesToSend[0],
+                    batchPhones,
+                    undefined, // info
+                    scheduledFor
+                );
+            } else {
+                console.log(`[Wizard] Using Advanced Campaign for '${batchName}' (Messages: ${messagesToSend.length})`);
+                sendResult = await createAdvancedCampaignForUser(
+                    user.uid,
+                    values.sendSpeed as any,
+                    messagesToSend,
+                    batchPhones,
+                    undefined,
+                    scheduledFor,
+                    values.buttons
+                );
+            }
 
             if (sendResult.error) {
                  toast({ variant: "destructive", title: `Erro no Lote ${batchIndex}`, description: sendResult.error });
@@ -288,7 +416,7 @@ export function CreateCampaignWizard() {
             const newCampaign: Omit<Campaign, 'id'> = {
                 name: batchName,
                 status: 'Scheduled', // Since we are scheduling
-                sentDate: currentDate.toISOString(),
+                sentDate: new Date(scheduledFor).toISOString(),
                 recipients: batchPhones.length,
                 engagement: 0,
                 userId: user.uid,
@@ -297,7 +425,7 @@ export function CreateCampaignWizard() {
             try {
                 const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
                 
-                const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId;
+                const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId || sendResult.folder_id;
                 let docRef;
     
                 if (uazapiId) {
@@ -307,19 +435,37 @@ export function CreateCampaignWizard() {
                     docRef = await addDoc(campaignCollection, newCampaign);
                 }
                 
-                lastDocRef = docRef;
                 successCount++;
+                lastDocRef = docRef;
 
-            } catch (error) {
-                console.error("Failed to save campaign to Firestore", error);
+            } catch (e) {
+                console.error("Error creating campaign doc", e);
+                toast({ variant: "destructive", title: `Erro ao salvar campanha`, description: "A campanha foi enviada mas houve erro ao salvar no histórico." });
             }
 
-            // Advance date for next batch (Next Day 08:00)
-            currentDate.setDate(currentDate.getDate() + 1);
-            currentDate.setHours(8, 0, 0, 0);
+            // Prepare date for next batch
+            currentBatchDate.setDate(currentBatchDate.getDate() + 1);
         }
         
         if (successCount > 0) {
+            // Update 'New' contacts to 'Regular'
+            const newContacts = targetContacts.filter(c => c.segment === 'New' || c.segment === 'new');
+            if (newContacts.length > 0) {
+                console.log(`[Wizard] Updating ${newContacts.length} contacts from New to Regular...`);
+                const chunkSize = 500;
+                for (let i = 0; i < newContacts.length; i += chunkSize) {
+                    const chunk = newContacts.slice(i, i + chunkSize);
+                    const batch = writeBatch(firestore);
+                    chunk.forEach(contact => {
+                        if (contact.id) {
+                            const contactRef = doc(firestore, 'users', user.uid, 'contacts', contact.id);
+                            batch.update(contactRef, { segment: 'Regular' });
+                        }
+                    });
+                    await batch.commit();
+                }
+            }
+
             toast({
                 title: "Campanha Agendada!",
                 description: `${successCount} lote(s) agendado(s) com sucesso.`
@@ -362,17 +508,17 @@ export function CreateCampaignWizard() {
             setIsOptimizing(false);
         }
     };
-    
-    const validContacts = contacts || [];
+
+    const uniqueSegments = useMemo(() => {
+        const segments = new Set(validContacts.map(c => c.segment).filter(Boolean));
+        return Array.from(segments).filter(s => s !== 'Inactive');
+    }, [validContacts]);
 
     const recipientCount = useMemo(() => {
-        const activeContacts = validContacts.filter(c => c.segment !== 'Inactive');
-        switch (contactSegment) {
-            case 'all':
-                return activeContacts.length;
-            default:
-                return 0;
+        if (contactSegment === 'all') {
+            return validContacts.filter(c => c.segment !== 'Inactive').length;
         }
+        return validContacts.filter(c => c.segment === contactSegment).length;
     }, [contactSegment, validContacts]);
 
     const blockedCount = useMemo(() => validContacts.filter(c => c.segment === 'Inactive').length, [validContacts]);
@@ -414,7 +560,7 @@ export function CreateCampaignWizard() {
                     <Card>
                         <CardHeader>
                             <CardTitle>Etapa 1: Para quem vamos mandar?</CardTitle>
-                            <CardDescription>Escolha o grupo de pessoas que receberá sua mensagem.</CardDescription>
+                            <CardDescription>Escolha o status dos contatos que receberão sua mensagem.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
                             <FormField control={form.control} name="name" render={({ field }) => (
@@ -424,16 +570,24 @@ export function CreateCampaignWizard() {
                                     <FormMessage />
                                 </FormItem>
                             )} />
-                            
+
                             <FormField control={form.control} name="contactSegment" render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>Grupo de Destinatários</FormLabel>
+                                    <FormLabel>Status dos Destinatários</FormLabel>
                                     <FormControl>
-                                        <div className="grid grid-cols-1 gap-4 pt-2">
-                                            <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary')}>
+                                        <div className="grid grid-cols-2 gap-4 pt-2">
+                                            <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary bg-primary/5')}>
                                                 <Users className="w-8 h-8"/>
                                                 <span className="font-bold text-center">Todos os Contatos</span>
+                                                <span className="text-xs text-muted-foreground">{validContacts.filter(c => c.segment !== 'Inactive').length} contatos</span>
                                             </Label>
+                                            {uniqueSegments.map(segment => (
+                                                <Label key={segment} onClick={() => setValue('contactSegment', segment, {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === segment && 'border-primary ring-2 ring-primary bg-primary/5')}>
+                                                    <Star className="w-6 h-6"/>
+                                                    <span className="font-bold text-center">{segment}</span>
+                                                    <span className="text-xs text-muted-foreground">{validContacts.filter(c => c.segment === segment).length} contatos</span>
+                                                </Label>
+                                            ))}
                                         </div>
                                     </FormControl>
                                     <FormMessage />
@@ -456,6 +610,67 @@ export function CreateCampaignWizard() {
                 {/* Step 3: Speed */}
                 <div className={cn(currentStep !== 2 && "hidden")}>
                     <SpeedSelector form={form} />
+                        
+                        {estimation && estimation.length > 0 && (
+                            <Card className="mt-6 border-blue-100 bg-blue-50/50">
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base flex items-center gap-2">
+                                        <CalendarClock className="h-5 w-5 text-blue-600" />
+                                        Cronograma Estimado de Envio
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Previsão baseada na velocidade média e limite de 300 msg/dia.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="space-y-3">
+                                        {estimation.map((batch) => (
+                                            <div key={batch.day} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-3 rounded-md border border-blue-100 text-sm">
+                                                <div className="flex items-center gap-3 mb-2 sm:mb-0">
+                                                    <div className="bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded text-xs w-16 text-center">
+                                                        Lote {batch.day}
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="font-medium text-gray-700">
+                                                            {format(batch.date, "dd/MM/yyyy", { locale: ptBR })}
+                                                        </span>
+                                                        <span className="text-gray-500 text-xs">
+                                                            {batch.count} contatos
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="flex items-center gap-4 text-gray-600">
+                                                    <div className="flex items-center gap-1" title="Início Estimado">
+                                                        <Clock className="h-3 w-3" />
+                                                        <span>{format(batch.date, "HH:mm")}</span>
+                                                    </div>
+                                                    <span className="text-gray-300">→</span>
+                                                    <div className={`flex items-center gap-1 ${batch.isLate || batch.endsNextDay ? "text-amber-600 font-medium" : ""}`} title="Término Estimado">
+                                                        <span>{format(batch.endTime, "HH:mm")}</span>
+                                                        {batch.endsNextDay && <span className="text-[10px] bg-amber-100 px-1 rounded ml-1">+1 dia</span>}
+                                                    </div>
+                                                </div>
+
+                                                {(batch.isLate || batch.endsNextDay) && (
+                                                    <div className="w-full sm:w-auto mt-2 sm:mt-0 sm:ml-4 text-amber-600 flex items-center gap-1 text-xs">
+                                                        <AlertTriangle className="h-3 w-3" />
+                                                        <span className="sm:hidden">Atenção: Termina tarde</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                        
+                                        <div className="mt-4 flex gap-2 text-xs text-gray-500 bg-white/50 p-2 rounded">
+                                            <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                                            <p>
+                                                Importante: O horário de término é uma estimativa. Se o envio ultrapassar o horário comercial ou entrar na madrugada, recomendamos ajustar o horário de início ou reduzir a velocidade para evitar bloqueios.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
                 </div>
                 
                 {/* Step 4: Summary and Confirmation */}

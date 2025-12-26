@@ -5,9 +5,12 @@ import { PlaceHolderImages } from '@/lib/placeholder-images';
 // The main data source will be Firestore.
 
 export const contacts: Omit<Contact, 'id' | 'userId'>[] = [
-  { name: 'Ana Silva', phone: '+55 11 98765-4321', segment: 'VIP', createdAt: new Date('2023-01-15').toISOString(), avatarUrl: PlaceHolderImages[0].imageUrl, birthday: '1990-05-20' },
-  { name: 'Bruno Costa', phone: '+55 21 91234-5678', segment: 'New', createdAt: new Date('2023-02-20').toISOString(), avatarUrl: PlaceHolderImages[1].imageUrl, birthday: '1985-11-12' },
-  { name: 'Carla Dias', phone: '+55 31 99999-8888', segment: 'Regular', createdAt: new Date('2022-11-30').toISOString(), avatarUrl: PlaceHolderImages[2].imageUrl },
+  { name: 'Ana Silva', phone: '+55 11 98765-4321', segment: 'Regular', createdAt: new Date('2023-01-15').toISOString(), avatarUrl: PlaceHolderImages[0].imageUrl, birthday: '1990-05-20' },
+  { name: 'João Santos', phone: '+55 21 91234-5678', segment: 'Regular', createdAt: new Date('2023-02-10').toISOString(), avatarUrl: PlaceHolderImages[1].imageUrl, birthday: '1985-08-12' },
+  { name: 'Maria Costa', phone: '+55 31 99876-5432', segment: 'Inactive', createdAt: new Date('2023-03-05').toISOString(), avatarUrl: PlaceHolderImages[2].imageUrl, birthday: '1992-11-30' },
+  { name: 'Pedro Oliveira', phone: '+55 41 98765-1234', segment: 'New', createdAt: new Date('2023-04-20').toISOString(), avatarUrl: PlaceHolderImages[3].imageUrl, birthday: '1988-03-15' },
+  { name: 'Lucas Pereira', phone: '+55 51 91234-8765', segment: 'Regular', createdAt: new Date('2023-05-12').toISOString(), avatarUrl: PlaceHolderImages[4].imageUrl, birthday: '1995-07-22' },
+  { name: 'Juliana Lima', phone: '+55 61 99876-2345', segment: 'Regular', createdAt: new Date('2023-06-01').toISOString(), avatarUrl: PlaceHolderImages[5].imageUrl, birthday: '1991-09-08' },
 ];
 
 export const campaigns: Omit<Campaign, 'id' | 'userId'>[] = [

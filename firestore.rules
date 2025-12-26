@@ -180,6 +180,21 @@ service cloud.firestore {
           allow update: if isExistingOwner(userId);
           allow delete: if isExistingOwner(userId);
         }
+
+        /**
+         * @description Manages interactions for a campaign (replies, blocks, etc.).
+         * @path /users/{userId}/campaigns/{campaignId}/interactions/{interactionId}
+         * @allow (get) User 'user_abc' reading an interaction for their own campaign.
+         * @allow (list) User 'user_abc' listing interactions for their own campaign.
+         * @principle Inherits ownership from the parent path, restricting access to the user.
+         */
+        match /interactions/{interactionId} {
+          allow get: if isOwner(userId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId);
+          allow update: if isExistingOwner(userId);
+          allow delete: if isExistingOwner(userId);
+        }
       }
     }
   }

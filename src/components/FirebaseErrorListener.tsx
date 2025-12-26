@@ -16,7 +16,8 @@ export function FirebaseErrorListener() {
     // The callback now expects a strongly-typed error, matching the event payload.
     const handleError = (error: FirestorePermissionError) => {
       // Set error in state to trigger a re-render.
-      setError(error);
+      // Wrap in setTimeout to avoid 'Cannot update a component while rendering a different component' warning
+      setTimeout(() => setError(error), 0);
     };
 
     // The typed emitter will enforce that the callback for 'permission-error'

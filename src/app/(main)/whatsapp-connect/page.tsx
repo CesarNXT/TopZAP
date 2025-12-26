@@ -10,9 +10,13 @@ import {
     disconnectInstance, 
     setWebhook, 
     forceDeleteInstance,
-    deleteInstanceByToken
+    deleteInstanceByToken,
+    checkInstanceStatus,
+    cleanupInstanceByName
 } from '@/app/actions/whatsapp-actions';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
@@ -29,16 +33,18 @@ interface InstanceStatus {
   profilePictureUrl?: string;
   token?: string;
   connected?: boolean;
+  createdAt?: string | number | Date;
 }
 
 export default function WhatsAppConnectPage() {
-    const { user } = useUser(); // Changed hook
+    const { user, isUserLoading } = useUser(); // Changed hook
     const firestore = useFirestore(); // Added firestore hook
     const { toast } = useToast();
     
     // State
     const [status, setStatus] = useState<InstanceStatus | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
     const [connectionStep, setConnectionStep] = useState('');
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
     
@@ -48,7 +54,11 @@ export default function WhatsAppConnectPage() {
 
     // 1. Sync with Firestore (Real-time updates)
     useEffect(() => {
-        if (!user || !firestore) return;
+        if (isUserLoading) return;
+        if (!user || !firestore) {
+            setIsInitialLoading(false);
+            return;
+        }
 
         const unsubscribe = onSnapshot(doc(firestore, 'users', user.uid), (docSnapshot) => {
             if (docSnapshot.exists()) {
@@ -68,66 +78,127 @@ export default function WhatsAppConnectPage() {
                         if (timerRef.current) clearInterval(timerRef.current);
                         setTimeLeft(null);
                         isConnectingRef.current = false;
+                        setIsLoading(false);
+                    } else if (uazapi.status === 'connecting' && uazapi.qrCode) {
+                        // Calculate remaining time based on creation time
+                        if (uazapi.createdAt) {
+                            const createdTime = new Date(uazapi.createdAt).getTime();
+                            const now = new Date().getTime();
+                            const elapsedSeconds = Math.floor((now - createdTime) / 1000);
+                            const maxDuration = 70; // 70 seconds validity
+                            const remaining = maxDuration - elapsedSeconds;
+
+                            if (remaining <= 0) {
+                                console.log("[Client] QR Code expired based on timestamp. Resetting...");
+                                // Auto-clear immediately if expired
+                                updateDoc(doc(firestore, 'users', user.uid), {
+                                    'uazapi.qrCode': deleteField(),
+                                    'uazapi.status': 'disconnected',
+                                    'uazapi.connected': false,
+                                    'uazapi.createdAt': deleteField()
+                                }).catch(console.error);
+                                setTimeLeft(null);
+                            } else {
+                                // Update timer with actual remaining time
+                                setTimeLeft(remaining);
+                            }
+                        } else {
+                            // Fallback if no timestamp (legacy)
+                            setTimeLeft(prev => prev === null ? 70 : prev);
+                        }
                     }
                 } else {
                     setStatus(null);
                 }
+            } else {
+                setStatus(null);
             }
+            // Mark initial load as done after first snapshot
+            setIsInitialLoading(false);
+        }, (error) => {
+            console.error("Firestore snapshot error:", error);
+            setIsInitialLoading(false);
         });
-
+        
         return () => unsubscribe();
-    }, [user]);
+    }, [user, firestore, isUserLoading]);
 
-    // Cleanup function when timeout is reached
-    const handleTimeoutCleanup = useCallback(async () => {
-        console.log("[Client] Timeout reached. Cleaning up...");
+    // Generic cleanup function
+    const resetConnectionState = useCallback(async (showTimeoutToast = false) => {
+        console.log(`[Client] Resetting connection state. Timeout: ${showTimeoutToast}`);
         setTimeLeft(null);
         setIsLoading(false);
         setConnectionStep('');
         
-        toast({ 
-            variant: "destructive", 
-            title: "Tempo Esgotado", 
-            description: "O QR Code expirou. Por favor, tente novamente." 
-        });
+        if (showTimeoutToast) {
+            toast({ 
+                variant: "destructive", 
+                title: "Tempo Esgotado", 
+                description: "O tempo de exibição do QR Code expirou." 
+            });
+        }
 
-        if (user && status?.instanceName && status?.token) {
-            await updateDoc(doc(firestore, 'users', user.uid), {
-                'uazapi.connected': false,
-                'uazapi.status': 'disconnected',
-                'uazapi.qrCode': deleteField(),
-            });
-            setTimeout(async () => {
-                try {
-                    await deleteInstanceByToken(status.token!);
-                    await updateDoc(doc(firestore, 'users', user.uid), {
-                        'uazapi.token': deleteField(),
-                    });
-                    await forceDeleteInstance(status.instanceName!);
-                } catch (error) {
-                    console.error("Cleanup error:", error);
-                }
-            }, 10000);
-        } else if (user) {
-            await updateDoc(doc(firestore, 'users', user.uid), {
-                'uazapi.connected': false,
-                'uazapi.status': 'disconnected',
-                'uazapi.qrCode': deleteField(),
-                'uazapi.token': deleteField(),
-            });
-            setTimeout(async () => {
-                try {
-                    await forceDeleteInstance(user.uid);
-                } catch (error) {
-                    console.error("Cleanup error:", error);
-                }
-            }, 10000);
+        // Restore deletion logic as per user request
+        if (user && status?.instanceName) {
+            try {
+                // Delete from provider
+                console.log("[Client] Deleting instance due to reset/timeout...");
+                await forceDeleteInstance(status.instanceName);
+                
+                // Clear firestore state
+                await updateDoc(doc(firestore, 'users', user.uid), {
+                    'uazapi.connected': false,
+                    'uazapi.status': 'disconnected',
+                    'uazapi.qrCode': deleteField(),
+                    'uazapi.token': deleteField(),
+                    'uazapi.instanceName': deleteField(),
+                    'uazapi.createdAt': deleteField(),
+                });
+            } catch (error) {
+                console.error("Cleanup error:", error);
+            }
         }
         
         setStatus(null);
     }, [user, firestore, status, toast]);
 
-    // 2. Countdown Timer Logic (40s QR + 50s deletion)
+    // Cleanup function when timeout is reached
+    const handleTimeoutCleanup = useCallback(async () => {
+        console.log("[Client] Timeout reached. Soft resetting local view (keeping instance for Webhook)...");
+        
+        // Soft reset: Just clear QR from UI, don't delete instance
+        // This allows late webhooks to still connect us
+        if (user) {
+             try {
+                await updateDoc(doc(firestore, 'users', user.uid), {
+                    'uazapi.qrCode': deleteField(),
+                    // We DO NOT change status to disconnected here, 
+                    // because we want to see if a webhook comes late.
+                    // But if we leave it 'connecting' without QR, it looks like a loading state.
+                    // Let's set it to 'disconnected' locally so user can try again,
+                    // BUT we do NOT call forceDeleteInstance.
+                    'uazapi.status': 'disconnected',
+                    'uazapi.connected': false,
+                });
+                
+                toast({ 
+                    variant: "destructive", 
+                    title: "Tempo Esgotado", 
+                    description: "O QR Code expirou. Tente novamente." 
+                });
+             } catch (e) {
+                 console.error("Soft reset failed:", e);
+             }
+        }
+        
+        // Reset local state vars
+        setTimeLeft(null);
+        setIsLoading(false);
+        setConnectionStep('');
+        
+    }, [user, firestore, toast]);
+
+    // 2. Countdown Timer Logic (Increased to 90s)
     useEffect(() => {
         if (timeLeft === null) return;
 
@@ -145,21 +216,86 @@ export default function WhatsAppConnectPage() {
         };
     }, [timeLeft, handleTimeoutCleanup]);
 
+    // Manual Status Check
+    const checkStatus = async () => {
+        if (!user || !status?.instanceName || !status?.token) return;
+        
+        toast({ title: "Verificando...", description: "Consultando status no servidor..." });
+        
+        try {
+            const res = await checkInstanceStatus(status.instanceName, status.token);
+            if (res.error) {
+                 toast({ variant: "destructive", title: "Erro", description: res.error });
+                 return;
+            }
+            
+            console.log("[Client] Status Check Result:", res);
+            
+            // If connected, update firestore
+            if (res.connectionState === 'open' || res.connectionState === 'connected') {
+                await updateDoc(doc(firestore, 'users', user.uid), {
+                    'uazapi.connected': true,
+                    'uazapi.status': 'connected',
+                    'uazapi.qrCode': deleteField(),
+                });
+                toast({ title: "Conectado!", description: "Sincronização realizada com sucesso." });
+            } else {
+                toast({ 
+                    variant: "warning", 
+                    title: "Ainda não conectado", 
+                    description: `Status atual: ${res.connectionState || 'Desconhecido'}` 
+                });
+            }
+        } catch (error: any) {
+            console.error("Check status failed:", error);
+            toast({ variant: "destructive", title: "Erro", description: "Falha ao verificar status." });
+        }
+    };
+
     // 3. Main Connection Flow
     const handleConnect = async () => {
         if (!user || !firestore) return;
         if (isConnectingRef.current) return;
 
+        // Validation for Ngrok on Localhost
+        // Using env var now, so no UI validation needed
+        
         try {
             setIsLoading(true);
             isConnectingRef.current = true;
             const instanceName = user.uid;
-            const webhookUrl = `${window.location.origin}/api/webhooks/whatsapp`;
+            
+            // Construct Webhook URL
+            let baseUrl = window.location.origin;
+            
+            // Override with Ngrok URL from env if available
+            const envNgrokUrl = process.env.NEXT_PUBLIC_NGROK_URL;
+            if (envNgrokUrl) {
+                 baseUrl = envNgrokUrl.replace(/\/$/, '');
+                 if (!baseUrl.startsWith('http')) {
+                     baseUrl = `https://${baseUrl}`;
+                 }
+            }
+
+            const webhookUrl = `${baseUrl}/api/webhooks/whatsapp`;
 
             // Step 1: Check if instance already exists (to avoid duplicates)
-            setConnectionStep('Verificando instâncias existentes...');
-            // We use a safe check - if we can't delete it (404), it doesn't exist
-            await forceDeleteInstance(instanceName);
+            // User requested explicit check and clean: "primeiro desconectar a instancia e depois vc tem que apagar"
+            setConnectionStep('Verificando e limpando instâncias...');
+            
+            // 1. Cleanup OLD session if it exists in our records (and is different from target)
+            if (status?.instanceName && status.instanceName !== instanceName) {
+                 console.log(`[Client] Cleaning up different old instance: ${status.instanceName}`);
+                 await cleanupInstanceByName(status.instanceName);
+                 await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            // 2. Cleanup TARGET session name (to ensure we can create it fresh)
+            // Robust cleanup: List -> Find -> Logout -> Delete
+            await cleanupInstanceByName(instanceName);
+            
+            // Add a safety delay to ensure the API has fully processed the deletion
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
             // Step 2: Init Instance
             setConnectionStep('Criando nova instância...');
@@ -168,20 +304,28 @@ export default function WhatsAppConnectPage() {
             // Retry once if 409/Exists error happens (race condition)
             if (initRes.error && (initRes.error.includes('exists') || initRes.error.includes('409'))) {
                 console.log("[Client] Instance exists, trying to force delete again and retry...");
+                setConnectionStep('Tentando limpar novamente...');
                 await forceDeleteInstance(instanceName);
-                await new Promise(r => setTimeout(r, 2000)); // Wait for cleanup
+                await new Promise(r => setTimeout(r, 2000)); // Wait longer for cleanup
                 initRes = await initInstance(instanceName, webhookUrl);
             }
 
             if (initRes.error) throw new Error(initRes.error);
             const token = initRes.token || initRes.hash || initRes.instance?.token;
+            
+            // IMPORTANT: Capture the ACTUAL instance name returned by the API
+            // Some providers generate a random ID or sanitize the name
+            const actualInstanceName = initRes.instance?.instanceName || initRes.instance?.name || instanceName;
+            
+            console.log(`[Client] Instance initialized. Requested: ${instanceName}, Actual: ${actualInstanceName}`);
+
             if (!token) throw new Error("Token não retornado pela API");
 
             // Step 3: Save Token (Client Side)
             setConnectionStep('Salvando credenciais...');
             await setDoc(doc(firestore, 'users', user.uid), {
                 uazapi: {
-                    instanceName,
+                    instanceName: actualInstanceName, // Use actual name
                     token,
                     status: 'created',
                     connected: false,
@@ -191,7 +335,7 @@ export default function WhatsAppConnectPage() {
 
             // Step 4: Webhook
             setConnectionStep('Configurando webhook...');
-            const webhookRes = await setWebhook(instanceName, token, webhookUrl);
+            const webhookRes = await setWebhook(actualInstanceName, token, webhookUrl);
             
             if (webhookRes.error) {
                 // Log warning but allow flow to continue if it's just a method/config error
@@ -206,7 +350,7 @@ export default function WhatsAppConnectPage() {
 
             // Step 5: Connect (Get QR)
             setConnectionStep('Gerando QR Code...');
-            const connectRes = await connectInstance(instanceName, token);
+            const connectRes = await connectInstance(actualInstanceName, token);
             if (connectRes.error) throw new Error(connectRes.error);
 
             const qrCode = connectRes.qrcode || connectRes.base64 || connectRes.instance?.qrcode;
@@ -216,10 +360,11 @@ export default function WhatsAppConnectPage() {
                 await updateDoc(doc(firestore, 'users', user.uid), {
                     'uazapi.qrCode': qrCode,
                     'uazapi.status': 'connecting',
-                    'uazapi.connected': false
+                    'uazapi.connected': false,
+                    'uazapi.instanceName': actualInstanceName // Ensure it's saved here too
                 });
                 
-                setTimeLeft(40);
+                setTimeLeft(70); // Set to 70 seconds as requested
                 setConnectionStep('Aguardando leitura...');
             } else {
                 throw new Error("QR Code não gerado");
@@ -232,7 +377,8 @@ export default function WhatsAppConnectPage() {
                 title: "Erro na Conexão",
                 description: error.message || "Falha ao iniciar conexão."
             });
-            handleTimeoutCleanup();
+            // Reset state without showing "Timeout" message
+            resetConnectionState(false);
         } finally {
             setIsLoading(false);
             // Note: isConnectingRef stays true until connected or timeout to prevent double clicks
@@ -247,15 +393,21 @@ export default function WhatsAppConnectPage() {
         setConnectionStep('Desconectando...');
         
         try {
-            await disconnectInstance(status.instanceName, status.token);
+            // Use robust cleanup to ensure all duplicates are removed (Logout -> Delete)
+            await cleanupInstanceByName(status.instanceName);
+
+            // Finally, clean up local state
             await updateDoc(doc(firestore, 'users', user.uid), {
                 'uazapi.connected': false,
                 'uazapi.status': 'disconnected',
                 'uazapi.qrCode': deleteField(),
                 'uazapi.token': deleteField(),
+                // We keep instanceName usually, but if we want a FULL reset, we might want to clear it too?
+                // The init function recreates it based on UID anyway.
+                // 'uazapi.instanceName': deleteField(), 
             });
             setStatus(null);
-            toast({ title: "Desconectado", description: "Instância removida com sucesso." });
+            toast({ title: "Desconectado", description: "Instância removida e resetada com sucesso." });
         } catch (error) {
             console.error("Disconnect error", error);
             toast({ variant: "destructive", title: "Erro", description: "Falha ao desconectar." });
@@ -265,6 +417,60 @@ export default function WhatsAppConnectPage() {
             isConnectingRef.current = false;
         }
     };
+
+    // 4. Stale State Detection (Fix for "Stuck" UI)
+    useEffect(() => {
+        // Only run if we have a user and status is 'connecting'
+        // And we are NOT currently running a timer (which means this is a fresh page load or stale state)
+        if (user && firestore && status?.status === 'connecting' && timeLeft === null && !isConnectingRef.current) {
+            console.log("[Client] Detected potentially stale 'connecting' state. Verifying...");
+            
+            const verifyAndClean = async () => {
+                // If missing critical data, just clean
+                if (!status.instanceName || !status.token) {
+                    console.log("[Client] Missing instance data. Cleaning up.");
+                    await handleDisconnect();
+                    return;
+                }
+
+                try {
+                    // Check real status
+                    const res = await checkInstanceStatus(status.instanceName, status.token);
+                    console.log("[Client] Stale check result:", res);
+
+                    if (res.error || (res.connectionState !== 'open' && res.connectionState !== 'connecting')) {
+                        // If instance is gone (404) or not connecting, we should reset.
+                        // Even if it says 'connecting' in backend, if we don't have the QR code locally (or it's old),
+                        // we can't show it. But status has qrCode. 
+                        // However, UAZAPI QR codes expire. If this is a page reload, the QR is likely dead.
+                        
+                        console.log("[Client] State invalid or expired. Resetting.");
+                        await handleDisconnect();
+                        toast({
+                            title: "Sessão Reiniciada",
+                            description: "A tentativa de conexão anterior expirou.",
+                        });
+                    } else if (res.connectionState === 'open') {
+                        // It connected while we were away!
+                        await updateDoc(doc(firestore, 'users', user.uid), {
+                            'uazapi.connected': true,
+                            'uazapi.status': 'connected',
+                            'uazapi.qrCode': deleteField(),
+                        });
+                        toast({ title: "Conectado!", description: "Sincronização recuperada com sucesso." });
+                    }
+                } catch (e) {
+                    console.error("[Client] Error verifying stale state:", e);
+                    await handleDisconnect();
+                }
+            };
+
+            verifyAndClean();
+        }
+    }, [status?.status, user, firestore]); // Dependencies allow running when status loads
+
+    // 5. Automatic Status Polling - REMOVED per user request to rely on Webhooks
+    // Previously checked every 10s/30min. Now we wait for Firestore updates via Webhook.
 
     // Render Logic
     const isConnected = status?.connected === true || status?.status === 'connected';
@@ -340,13 +546,18 @@ export default function WhatsAppConnectPage() {
                                     
                                     <div className="flex items-center gap-2 text-sm font-medium text-slate-600">
                                         <Timer className="h-4 w-4 animate-pulse text-amber-500" />
-                                        <span>Expira em {timeLeft} segundos</span>
+                                        <span>Expira em {timeLeft !== null ? timeLeft : '--'} segundos</span>
+                                    </div>
+                                    
+                                    <div className="flex flex-col gap-2 w-full pt-2">
+                                        <p className="text-xs text-center text-muted-foreground animate-pulse">
+                                            Aguardando confirmação automática via Webhook...
+                                        </p>
                                     </div>
                                 </div>
-                            ) : (
-                                /* Placeholder / Loading State */
+                            ) : isLoading ? (
+                                /* Loading State */
                                 <div className="flex h-48 w-full flex-col items-center justify-center rounded-xl bg-slate-50/50 border border-dashed border-slate-200 p-6 text-center">
-                                    {isLoading ? (
                                         <div className="space-y-4">
                                             <div className="relative mx-auto flex h-16 w-16 items-center justify-center">
                                                 <div className="absolute inset-0 animate-ping rounded-full bg-primary/20" />
@@ -356,31 +567,38 @@ export default function WhatsAppConnectPage() {
                                                 {connectionStep}
                                             </p>
                                         </div>
-                                    ) : (
-                                        <div className="space-y-2">
-                                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-                                                <QrCode className="h-6 w-6 text-slate-400" />
-                                            </div>
-                                            <p className="text-sm text-muted-foreground">
-                                                Nenhuma conexão ativa.
-                                                <br />
-                                                Clique abaixo para iniciar.
-                                            </p>
-                                        </div>
-                                    )}
+                                </div>
+                            ) : (
+                                /* Initial State: Button to Connect */
+                                <div className="flex flex-col items-center justify-center space-y-6 py-8">
+                                    <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-slate-100 ring-8 ring-slate-50">
+                                        <QrCode className="h-10 w-10 text-slate-400" />
+                                    </div>
+                                    <div className="text-center space-y-2 max-w-sm">
+                                        <h3 className="text-lg font-medium text-slate-900">
+                                            {status?.status === 'disconnected' ? "Instância Desconectada" : "Nenhuma conexão ativa"}
+                                        </h3>
+                                        <p className="text-sm text-slate-500">
+                                            {status?.status === 'disconnected' 
+                                                ? "Sua instância foi desconectada. Gere um novo QR Code para reconectar."
+                                                : "Clique no botão abaixo para gerar um novo QR Code e conectar seu WhatsApp."}
+                                        </p>
+                                    </div>
                                 </div>
                             )}
 
-                            {/* Instructions (Only if not loading) */}
+                            {/* Instructions (Only if not loading and no QR) */}
                             {!isLoading && !hasQrCode && (
-                                <Alert>
-                                    <AlertCircle className="h-4 w-4" />
-                                    <AlertTitle>Importante</AlertTitle>
-                                    <AlertDescription>
-                                        Use o <strong>WhatsApp Business</strong> para maior estabilidade.
-                                        Tenha o celular em mãos.
-                                    </AlertDescription>
-                                </Alert>
+                                <div className="w-full space-y-4">
+                                    <Alert>
+                                        <AlertCircle className="h-4 w-4" />
+                                        <AlertTitle>Importante</AlertTitle>
+                                        <AlertDescription>
+                                            Use o <strong>WhatsApp Business</strong> para maior estabilidade.
+                                            Tenha o celular em mãos.
+                                        </AlertDescription>
+                                    </Alert>
+                                </div>
                             )}
                         </div>
                     )}

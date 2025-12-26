@@ -7,6 +7,7 @@ export interface Instance {
 export interface InstanceStatus {
   instanceId: string;
   status: 'disconnected' | 'connecting' | 'connected';
+  createdAt?: string;
   qrCode?: string; // Base64 string for QR code
   pairCode?: string; // Pairing code
   phone?: string;
