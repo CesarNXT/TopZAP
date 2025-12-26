@@ -268,13 +268,19 @@ export default function WhatsAppConnectPage() {
             // Construct Webhook URL
             let baseUrl = window.location.origin;
             
-            // Override with Ngrok URL from env if available
+            // Override with Ngrok URL ONLY if we are on localhost
+            // This ensures production uses the real domain, while local dev uses the tunnel
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             const envNgrokUrl = process.env.NEXT_PUBLIC_NGROK_URL;
-            if (envNgrokUrl) {
+            
+            if (isLocalhost && envNgrokUrl) {
+                 console.log("[Client] Localhost detected, using Ngrok URL for webhook.");
                  baseUrl = envNgrokUrl.replace(/\/$/, '');
                  if (!baseUrl.startsWith('http')) {
                      baseUrl = `https://${baseUrl}`;
                  }
+            } else {
+                 console.log("[Client] Production/Server detected, using current origin for webhook.");
             }
 
             const webhookUrl = `${baseUrl}/api/webhooks/whatsapp`;
