@@ -126,7 +126,7 @@ export async function POST(request: Request) {
         }
 
         // 2. Handle New Messages (Auto-create Contacts)
-        if (event === 'MESSAGES_UPSERT' || event === 'messages') {
+        if (event === 'MESSAGES_UPSERT' || event === 'messages' || event === 'sender') {
             const messages = safeData.messages || (safeData.message ? [safeData.message] : []);
 
             for (const msg of messages) {
@@ -170,14 +170,33 @@ export async function POST(request: Request) {
 
                     // Skip processing if it's an API message, but maybe log it?
                     // User wants to track "who it was sent to".
-                    // If it was sent by API, it's not a reply, so we shouldn't count it as engagement.
-                    if (wasSentByApi) {
-                         console.log(`[Webhook] Message sent by API to ${phone}. Logging interaction...`);
-                         // We can log this as a 'sent' interaction to the latest campaign or just generic log
-                         // Ideally we would match it to a specific campaign if we had context, but we don't always have it here.
-                         // For now, let's just NOT continue, but treat it as a "system sent" message below.
-                         // However, be careful NOT to trigger auto-replies or "New Contact" creation loops if not desired.
-                         // Actually, creating a contact if we send a message to them via API is good behavior (they are now a contact).
+                    if (wasSentByApi || fromMe) {
+                         console.log(`[Webhook] Message sent (API/Manual) to ${phone}. Updating lastContactedAt...`);
+                         
+                         // Update contact's lastContactedAt
+                         try {
+                             const usersRef = db.collection('users');
+                             // Optimization: We could cache this lookup if instance is same, but for safety inside loop:
+                             const userSnapshot = await usersRef.where('uazapi.instanceName', '==', instance).get();
+                             
+                             if (!userSnapshot.empty) {
+                                 const userDoc = userSnapshot.docs[0];
+                                 const contactsRef = userDoc.ref.collection('contacts');
+                                 const contactSnapshot = await contactsRef.where('phone', '==', phone).get();
+                                 
+                                 if (!contactSnapshot.empty) {
+                                     await contactSnapshot.docs[0].ref.update({
+                                         lastContactedAt: new Date().toISOString()
+                                     });
+                                     console.log(`[Webhook] Marked ${phone} as contacted.`);
+                                 } else if (fromMe && !wasSentByApi) {
+                                     // Optional: Create contact if manually sent and doesn't exist?
+                                     // Let's stick to updating existing for now to avoid clutter.
+                                 }
+                             }
+                         } catch (e) {
+                             console.error(`[Webhook] Failed to update lastContactedAt for ${phone}`, e);
+                         }
                     }
                     
                     // Check for Block Action

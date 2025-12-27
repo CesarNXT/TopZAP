@@ -206,6 +206,10 @@ export default function ContactsPage() {
           </PageHeaderDescription>
         </div>
         <PageHeaderActions>
+            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Excluir Todos
+            </Button>
             <Button variant="outline" onClick={() => setIsImportWizardOpen(true)}>
                 <Upload className="mr-2 h-4 w-4" />
                 Importar CSV

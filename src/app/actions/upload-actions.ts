@@ -1,34 +1,57 @@
 'use server';
 
 export async function uploadToCatbox(formData: FormData) {
-  try {
-    const file = formData.get('fileToUpload') as File;
-    if (!file) throw new Error('No file provided');
+  const file = formData.get('fileToUpload') as File;
+  if (!file) {
+      return { error: 'No file provided' };
+  }
 
-    // Re-construct FormData for the fetch call
-    // Since we are in a server action receiving FormData, we can process it or forward it.
-    // However, node-fetch or native fetch in Node environment with FormData might need 'form-data' package or careful handling.
-    // Next.js App Router uses native fetch which supports FormData.
-    
-    // We need to ensure 'reqtype' is set.
-    if (!formData.get('reqtype')) {
-        formData.append('reqtype', 'fileupload');
-    }
+  // 1. Try Catbox (Primary)
+  try {
+    // Clone FormData for Catbox
+    const catboxData = new FormData();
+    catboxData.append('reqtype', 'fileupload');
+    catboxData.append('fileToUpload', file);
 
     const response = await fetch('https://catbox.moe/user/api.php', {
         method: 'POST',
-        body: formData,
+        body: catboxData,
     });
 
-    if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Catbox upload failed: ${response.status} ${text}`);
+    if (response.ok) {
+        const url = await response.text();
+        return { url };
     }
-
-    const url = await response.text();
-    return { url };
+    console.warn(`Catbox upload failed: ${response.status}`);
   } catch (error: any) {
-    console.error('Catbox upload error:', error);
-    return { error: error.message };
+    console.warn('Catbox upload error:', error);
   }
+
+  // 2. Fallback: Tmpfiles.org
+  try {
+      console.log("Attempting fallback to tmpfiles.org...");
+      const tmpData = new FormData();
+      tmpData.append('file', file);
+
+      const response = await fetch('https://tmpfiles.org/api/v1/upload', {
+          method: 'POST',
+          body: tmpData,
+      });
+
+      if (response.ok) {
+          const json = await response.json();
+          if (json.status === 'success' && json.data.url) {
+              // Convert to direct link: https://tmpfiles.org/123/file.jpg -> https://tmpfiles.org/dl/123/file.jpg
+              const originalUrl = json.data.url;
+              const directUrl = originalUrl.replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+              return { url: directUrl };
+          }
+      }
+      console.warn(`Tmpfiles upload failed: ${response.status}`);
+  } catch (error: any) {
+      console.error('Tmpfiles upload error:', error);
+  }
+
+  // 3. Last Resort Fallback (if any other service exists, or just fail)
+  return { error: 'Falha no upload em todos os servidores (Catbox e Tmpfiles). Tente novamente.' };
 }

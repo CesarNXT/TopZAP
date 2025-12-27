@@ -9,6 +9,7 @@ export type Contact = {
   birthday?: string;
   blockedAt?: string; // ISO String
   lastReplyAt?: string; // ISO String
+  lastContactedAt?: string; // ISO String
   notes?: string;
 };
 

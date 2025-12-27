@@ -66,12 +66,13 @@ export default function WhatsAppConnectPage() {
                 const uazapi = data.uazapi as InstanceStatus | undefined;
 
                 if (uazapi) {
-                    setStatus(prev => ({
-                        ...prev,
+                    // FIX: Do not merge with prev state to avoid stale data (like deleted qrCode)
+                    // We construct the new state directly from Firestore data
+                    setStatus({
                         ...uazapi,
-                        // Prefer Firestore status, but fallback to local if needed
+                        // Ensure status is valid
                         status: uazapi.status || 'disconnected'
-                    }));
+                    } as InstanceStatus);
 
                     // Stop timer if connected
                     if (uazapi.status === 'connected') {

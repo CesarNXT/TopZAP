@@ -43,7 +43,14 @@ import { SpeedSelector } from './speed-selector';
 import { v4 as uuidv4 } from 'uuid';
 import type { Contact, Campaign } from '@/lib/types';
 import { useUser, useFirestore, useCollection } from '@/firebase';
-import { collection, addDoc, doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { collection, addDoc, doc, getDoc, setDoc, writeBatch, query, orderBy, limit } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
 
 import { createSimpleCampaignForUser, createAdvancedCampaignForUser } from '@/app/actions/whatsapp-actions';
@@ -51,7 +58,8 @@ import { uploadToCatbox } from '@/app/actions/upload-actions';
 
 const formSchema = z.object({
   name: z.string().min(5, { message: 'O nome da campanha deve ter pelo menos 5 caracteres.' }),
-  contactSegment: z.string().min(1, { message: 'Por favor, selecione um grupo de destinatários.' }),
+  contactSegment: z.string().optional(),
+  selectedContactId: z.string().optional(),
   message: z.string().optional(),
   sendSpeed: z.string().default('safe'),
   buttons: z.array(z.object({
@@ -69,6 +77,12 @@ const formSchema = z.object({
 }).refine(data => data.message || data.media, {
     message: "A campanha precisa ter uma mensagem ou um anexo de mídia.",
     path: ['message'],
+}).refine(data => {
+    if (!data.contactSegment) return false;
+    return true;
+}, {
+    message: "Selecione um segmento.",
+    path: ['contactSegment']
 }).refine((data) => {
     if (!data.startDate || !data.startHour) return true;
     const start = new Date(`${data.startDate}T${data.startHour}:00`);
@@ -96,6 +110,17 @@ export function CreateCampaignWizard() {
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
     const [submitError, setSubmitError] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Fetch previous campaigns for "Copy From" feature
+    const campaignsQuery = useMemoFirebase(() => {
+        if (!user) return null;
+        return query(
+            collection(firestore, 'users', user.uid, 'campaigns'),
+            orderBy('createdAt', 'desc'),
+            limit(20)
+        );
+    }, [firestore, user]);
+    const { data: previousCampaigns } = useCollection<Campaign>(campaignsQuery);
 
     const contactsQuery = useMemoFirebase(() => {
         if (!user) return null;
@@ -136,18 +161,38 @@ export function CreateCampaignWizard() {
     const mediaFile = watch('media');
     const sendSpeed = watch('sendSpeed');
     const contactSegment = watch('contactSegment');
+    const selectedContactId = watch('selectedContactId');
     const buttons = watch('buttons');
     const dailyLimit = watch('dailyLimit');
     const startDate = watch('startDate');
     const startHour = watch('startHour');
     const nextDaysStartHour = watch('nextDaysStartHour');
 
+    const handleCopyCampaign = (campaignId: string) => {
+        const campaign = previousCampaigns?.find(c => c.id === campaignId);
+        if (campaign) {
+            setValue('name', `${campaign.name} (Cópia)`);
+            setValue('message', campaign.message || '');
+            setValue('sendSpeed', campaign.sendSpeed || 'safe');
+            // Check if segment exists or default to individual if not found? 
+            // Better to keep user choice or try to match.
+            // For now, let's copy the message settings mainly.
+            if (campaign.dailyLimit) setValue('dailyLimit', campaign.dailyLimit);
+            toast({ title: "Configurações copiadas", description: "Os dados da campanha anterior foram carregados." });
+        }
+    };
+
     // Calculate Estimations
     const estimation = useMemo(() => {
         if (!contacts || !contactSegment) return null;
         
-        let targetContacts = [];
-        if (contactSegment === 'all') {
+        let targetContacts: Contact[] = [];
+        if (contactSegment === 'individual') {
+            if (selectedContactId) {
+                const contact = validContacts.find(c => c.id === selectedContactId);
+                if (contact) targetContacts = [contact];
+            }
+        } else if (contactSegment === 'all') {
             targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
         } else {
             targetContacts = validContacts.filter(c => c.segment === contactSegment);
@@ -303,9 +348,9 @@ export function CreateCampaignWizard() {
                         buttons: values.buttons // Attach buttons
                     });
                 }
-            } catch (e) {
+            } catch (e: any) {
                 console.error("File upload error", e);
-                toast({ variant: "destructive", title: "Erro", description: "Falha ao processar arquivo de mídia (Catbox)." });
+                toast({ variant: "destructive", title: "Erro no Upload", description: e.message || "Falha ao processar arquivo de mídia." });
                 setIsSubmitting(false);
                 return;
             }
@@ -323,8 +368,13 @@ export function CreateCampaignWizard() {
         }
 
         // Get active phones
-        let targetContacts = validContacts;
-        if (values.contactSegment === 'all') {
+        let targetContacts: Contact[] = [];
+        if (values.contactSegment === 'individual') {
+            if (values.selectedContactId) {
+                const contact = validContacts.find(c => c.id === values.selectedContactId);
+                if (contact) targetContacts = [contact];
+            }
+        } else if (values.contactSegment === 'all') {
             targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
         } else {
             targetContacts = validContacts.filter(c => c.segment === values.contactSegment);
@@ -543,11 +593,14 @@ export function CreateCampaignWizard() {
     }, [validContacts]);
 
     const recipientCount = useMemo(() => {
+        if (contactSegment === 'individual') {
+            return selectedContactId ? 1 : 0;
+        }
         if (contactSegment === 'all') {
             return validContacts.filter(c => c.segment !== 'Inactive').length;
         }
         return validContacts.filter(c => c.segment === contactSegment).length;
-    }, [contactSegment, validContacts]);
+    }, [contactSegment, validContacts, selectedContactId]);
 
     const blockedCount = useMemo(() => validContacts.filter(c => c.segment === 'Inactive').length, [validContacts]);
 
@@ -591,6 +644,25 @@ export function CreateCampaignWizard() {
                             <CardDescription>Escolha o status dos contatos que receberão sua mensagem.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
+                            {/* Copy From Campaign */}
+                            {previousCampaigns && previousCampaigns.length > 0 && (
+                                <div className="space-y-2 pb-4 border-b">
+                                    <Label>Copiar de campanha anterior (Opcional)</Label>
+                                    <Select onValueChange={handleCopyCampaign}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Selecione uma campanha para copiar..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {previousCampaigns.map(c => (
+                                                <SelectItem key={c.id} value={c.id}>
+                                                    {c.name} ({format(c.createdAt?.toDate() || new Date(), 'dd/MM/yyyy')})
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
+
                             <FormField control={form.control} name="name" render={({ field }) => (
                                 <FormItem>
                                     <FormLabel>Nome da Campanha</FormLabel>
@@ -601,9 +673,10 @@ export function CreateCampaignWizard() {
 
                             <FormField control={form.control} name="contactSegment" render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>Status dos Destinatários</FormLabel>
+                                    <FormLabel>Quem receberá esta campanha?</FormLabel>
                                     <FormControl>
-                                        <div className="grid grid-cols-2 gap-4 pt-2">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                                            {/* Option: All Contacts */}
                                             <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary bg-primary/5')}>
                                                 <Users className="w-8 h-8"/>
                                                 <span className="font-bold text-center">Todos os Contatos</span>
@@ -615,6 +688,8 @@ export function CreateCampaignWizard() {
                                                     )}
                                                 </span>
                                             </Label>
+                                            
+                                            {/* Dynamic Segments */}
                                             {uniqueSegments.map(segment => (
                                                 <Label key={segment} onClick={() => setValue('contactSegment', segment, {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === segment && 'border-primary ring-2 ring-primary bg-primary/5')}>
                                                     <Star className="w-6 h-6"/>
@@ -633,13 +708,14 @@ export function CreateCampaignWizard() {
                                         </div>
                                     </FormControl>
                                     <FormMessage />
-                                    {contactSegment && (
-                                        <div className='pt-2'>
-                                            <FormDescription>Esta campanha será enviada para <strong>{recipientCount}</strong> pessoas.</FormDescription>
-                                        </div>
-                                    )}
                                 </FormItem>
                             )} />
+
+                            {contactSegment && (
+                                <div className='pt-2'>
+                                    <FormDescription>Esta campanha será enviada para <strong>{recipientCount}</strong> pessoas.</FormDescription>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
                 </div>

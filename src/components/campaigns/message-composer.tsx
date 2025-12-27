@@ -49,27 +49,6 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
     }
   }, [messageType, setValue]);
 
-  const handleVariableInsert = (variable: string) => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const text = textarea.value;
-        const newText = text.substring(0, start) + `[${variable}]` + text.substring(end);
-        setValue('message', newText, { shouldValidate: true });
-        textarea.focus();
-        // Removed setTimeout as it might interfere with focus if component doesn't remount
-        // But since we are fixing the remount issue, setTimeout might be fine. 
-        // However, setting selection immediately is usually better if safe.
-        // Let's keep it simple for now, maybe remove setTimeout if not needed.
-        // The user complained about "typing one letter", which is the remount issue.
-        // But let's try to set selection immediately.
-        requestAnimationFrame(() => {
-             textarea.selectionStart = textarea.selectionEnd = start + variable.length + 2;
-        });
-    }
-  };
-
   return (
     <Card>
       <CardHeader>
@@ -88,7 +67,6 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                 <MessageSlot 
                     form={form} 
                     textareaRef={textareaRef} 
-                    handleVariableInsert={handleVariableInsert}
                     onOptimize={onOptimize}
                     isOptimizing={isOptimizing}
                     messageValue={messageValue}
@@ -103,7 +81,6 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                     placeholder="Digite uma legenda opcional..." 
                     isOptional 
                     textareaRef={textareaRef}
-                    handleVariableInsert={handleVariableInsert}
                     onOptimize={onOptimize}
                     isOptimizing={isOptimizing}
                     messageValue={messageValue}
@@ -121,7 +98,6 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                     placeholder="Digite uma legenda opcional..." 
                     isOptional 
                     textareaRef={textareaRef}
-                    handleVariableInsert={handleVariableInsert}
                     onOptimize={onOptimize}
                     isOptimizing={isOptimizing}
                     messageValue={messageValue}
@@ -192,19 +168,17 @@ interface MessageSlotProps {
     placeholder?: string;
     isOptional?: boolean;
     textareaRef: React.RefObject<HTMLTextAreaElement>;
-    handleVariableInsert: (variable: string) => void;
     onOptimize: () => Promise<void>;
     isOptimizing: boolean;
     messageValue: string;
 }
-  
+
 function MessageSlot({
     form, 
     label = "Mensagem", 
-    placeholder = "Olá [Nome], confira nossas novidades...", 
+    placeholder = "Olá, confira nossas novidades...", 
     isOptional=false,
     textareaRef,
-    handleVariableInsert,
     onOptimize,
     isOptimizing,
     messageValue
@@ -217,11 +191,7 @@ function MessageSlot({
         <FormItem>
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <FormLabel>{label} {isOptional && <span className='text-muted-foreground text-xs'>(Opcional)</span>}</FormLabel>
-                <div className="flex items-center gap-2">
-                    <span className='text-xs text-muted-foreground'>Inserir variável:</span>
-                    <Button type="button" variant="outline" size="sm" className="h-7 px-2" onClick={() => handleVariableInsert('Nome')}>[Nome]</Button>
-                    <Button type="button" variant="outline" size="sm" className="h-7 px-2" onClick={() => handleVariableInsert('Telefone')}>[Telefone]</Button>
-                </div>
+
             </div>
             <FormControl>
             <Textarea
