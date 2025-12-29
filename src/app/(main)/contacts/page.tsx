@@ -3,14 +3,16 @@ import React from 'react';
 import { PageHeader, PageHeaderHeading, PageHeaderDescription, PageHeaderActions } from '@/components/page-header';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { Button } from '@/components/ui/button';
-import { PlusCircle, Upload, Trash2 } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PlusCircle, Upload, Trash2, Tag, Users, UserCheck, Ban } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { CsvImportWizard } from '@/components/contacts/csv-import-wizard';
 import { useToast } from '@/hooks/use-toast';
 import type { Contact } from '@/lib/types';
 import { useUser, useFirestore, useMemoFirebase } from '@/firebase';
-import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query } from 'firebase/firestore';
+import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query, where, getCountFromServer } from 'firebase/firestore';
 import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
+import { TagManagerDialog } from '@/components/contacts/tag-manager-dialog';
 
 // Função para formatar o número de telefone para o padrão de 12 dígitos (55+DDD+XXXXYYYY)
 const formatPhoneNumberForDB = (phone: string | undefined | null): string => {
@@ -59,14 +61,86 @@ export default function ContactsPage() {
   const [isFormOpen, setIsFormOpen] = React.useState(false);
   const [isImportWizardOpen, setIsImportWizardOpen] = React.useState(false);
   const [isDeleteAllOpen, setIsDeleteAllOpen] = React.useState(false);
+  const [isTagManagerOpen, setIsTagManagerOpen] = React.useState(false);
   const [contactToEdit, setContactToEdit] = React.useState<Contact | null>(null);
   const [filter, setFilter] = React.useState('all');
   const [importCounter, setImportCounter] = React.useState(0);
-  
+  const [stats, setStats] = React.useState({ total: 0, active: 0, blocked: 0 });
+
   const contactsCollectionRef = useMemoFirebase(() => {
     if (!user) return null;
     return collection(firestore, 'users', user.uid, 'contacts');
-  }, [firestore, user]);
+  }, [firestore, user?.uid]);
+
+  React.useEffect(() => {
+    async function fetchStats() {
+        if (!contactsCollectionRef) return;
+        
+        // Check session cache to avoid quota exhaustion (429/resource-exhausted)
+        // We only refetch if importCounter changes or cache is expired (> 5 min)
+        const cacheKey = `contactStats_${user?.uid}`;
+        const cached = sessionStorage.getItem(cacheKey);
+        const now = Date.now();
+        
+        if (cached) {
+            try {
+                const { timestamp, data, lastImportCounter } = JSON.parse(cached);
+                // Use cache if importCounter matches and it's fresh enough (5 mins)
+                if (importCounter === lastImportCounter && (now - timestamp < 5 * 60 * 1000)) {
+                    setStats(data);
+                    return;
+                }
+            } catch (e) {
+                // Invalid cache, ignore
+            }
+        }
+
+        try {
+            // Total
+            const totalSnapshot = await getCountFromServer(contactsCollectionRef);
+            const total = totalSnapshot.data().count;
+
+            // Active
+            const activeQuery = query(contactsCollectionRef, where('segment', '==', 'Active'));
+            const activeSnapshot = await getCountFromServer(activeQuery);
+            const active = activeSnapshot.data().count;
+
+            // Blocked
+            const blockedQuery = query(contactsCollectionRef, where('segment', '==', 'Blocked'));
+            const blockedSnapshot = await getCountFromServer(blockedQuery);
+            const blocked = blockedSnapshot.data().count;
+
+            const newStats = { total, active, blocked };
+            setStats(newStats);
+            
+            // Save to session storage
+            sessionStorage.setItem(cacheKey, JSON.stringify({
+                timestamp: now,
+                data: newStats,
+                lastImportCounter: importCounter
+            }));
+
+        } catch (error: any) {
+            console.error("Error fetching stats:", error);
+            // Handle Quota Exceeded gracefully
+            if (error.code === 'resource-exhausted' || error.message?.includes('429')) {
+                // If we have cached data (even if stale/wrong importCounter), use it as fallback
+                if (cached) {
+                     try {
+                         const { data } = JSON.parse(cached);
+                         setStats(data);
+                         // Don't toast error to user to avoid spam, just log warning
+                         console.warn("Quota exceeded, using cached stats.");
+                         return;
+                     } catch(e) {}
+                }
+                // If really no data, we might just leave 0s or show a silent error
+            }
+        }
+    }
+
+    fetchStats();
+  }, [contactsCollectionRef, importCounter, user?.uid]);
 
 
   const handleSaveContact = async (contactData: Partial<Contact>) => {
@@ -90,7 +164,7 @@ export default function ContactsPage() {
                 userId: user.uid,
                 name: dataToSave.name || '',
                 phone: dataToSave.phone || '',
-                segment: dataToSave.segment || 'New',
+                segment: dataToSave.segment || 'Active',
                 createdAt: new Date(),
             };
 
@@ -110,27 +184,67 @@ export default function ContactsPage() {
     }
   };
   
-  const handleBatchImport = async (contacts: { name: string; phone: string }[]) => {
+  const handleBatchImport = async (contacts: { name: string; phone: string }[], tags: string[]) => {
     if (!user) {
         toast({ title: "Erro", description: "Você precisa estar logado.", variant: "destructive" });
         return;
     }
     
     try {
+        // 1. Fetch existing contacts to check for duplicates
+        // This might be heavy for very large collections, but necessary for deduplication without schema changes.
+        const q = query(collection(firestore, 'users', user.uid, 'contacts'));
+        const querySnapshot = await getDocs(q);
+        const existingPhones = new Set<string>();
+        querySnapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.phone) existingPhones.add(data.phone);
+        });
+
+        // 2. Prepare contacts to import (deduplicate against DB)
+        const contactsToImport: any[] = [];
+        let duplicatesCount = 0;
+
+        // Use a local set for the batch itself to avoid duplicates within the CSV (though Wizard handles this, extra safety)
+        const batchPhones = new Set<string>();
+
+        contacts.forEach(contactData => {
+            const formattedPhone = formatPhoneNumberForDB(contactData.phone);
+            
+            // Check if already in DB or already in this batch
+            if (existingPhones.has(formattedPhone) || batchPhones.has(formattedPhone)) {
+                duplicatesCount++;
+                return; 
+            }
+
+            batchPhones.add(formattedPhone);
+            
+            contactsToImport.push({
+                userId: user.uid,
+                name: contactData.name || '',
+                phone: formattedPhone,
+                segment: 'Active',
+                tags: tags || [],
+                createdAt: new Date(),
+            });
+        });
+
+        if (contactsToImport.length === 0) {
+            toast({ 
+                title: "Importação cancelada", 
+                description: `Todos os ${contacts.length} contatos já existem na sua lista.`,
+                variant: "default" 
+            });
+            setIsImportWizardOpen(false);
+            return;
+        }
+
         const chunkSize = 500;
-        for (let i = 0; i < contacts.length; i += chunkSize) {
-            const chunk = contacts.slice(i, i + chunkSize);
+        for (let i = 0; i < contactsToImport.length; i += chunkSize) {
+            const chunk = contactsToImport.slice(i, i + chunkSize);
             const batch = writeBatch(firestore);
             
-            chunk.forEach(contactData => {
-                const formattedPhone = formatPhoneNumberForDB(contactData.phone);
-                const newContact: Omit<Contact, 'id' | 'avatarUrl'> = {
-                    userId: user.uid,
-                    name: contactData.name || '',
-                    phone: formattedPhone,
-                    segment: 'Regular',
-                    createdAt: new Date(),
-                };
+            chunk.forEach((newContact: any) => {
                 const contactRef = doc(collection(firestore, 'users', user.uid, 'contacts'));
                 batch.set(contactRef, newContact);
             });
@@ -140,7 +254,7 @@ export default function ContactsPage() {
 
         toast({
             title: "Contatos importados!",
-            description: `${contacts.length} novos contatos foram adicionados com sucesso.`
+            description: `${contactsToImport.length} novos contatos adicionados. ${duplicatesCount > 0 ? `${duplicatesCount} duplicados foram ignorados.` : ''}`
         });
         setIsImportWizardOpen(false);
         setImportCounter(c => c + 1); // Trigger refetch
@@ -210,6 +324,10 @@ export default function ContactsPage() {
                 <Trash2 className="mr-2 h-4 w-4" />
                 Excluir Todos
             </Button>
+            <Button variant="outline" onClick={() => setIsTagManagerOpen(true)}>
+                <Tag className="mr-2 h-4 w-4" />
+                Etiquetas
+            </Button>
             <Button variant="outline" onClick={() => setIsImportWizardOpen(true)}>
                 <Upload className="mr-2 h-4 w-4" />
                 Importar CSV
@@ -221,6 +339,42 @@ export default function ContactsPage() {
         </PageHeaderActions>
       </PageHeader>
       
+      <div className="grid gap-4 md:grid-cols-3 mb-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Total de Contatos
+            </CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.total}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Contatos Ativos
+            </CardTitle>
+            <UserCheck className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.active}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Contatos Bloqueados
+            </CardTitle>
+            <Ban className="h-4 w-4 text-red-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.blocked}</div>
+          </CardContent>
+        </Card>
+      </div>
+
       <ContactsTable 
         importCounter={importCounter}
         onEditRequest={handleEditRequest} 
@@ -252,6 +406,11 @@ export default function ContactsPage() {
         isOpen={isDeleteAllOpen}
         onOpenChange={setIsDeleteAllOpen}
         onConfirm={handleDeleteAllContacts}
+      />
+
+      <TagManagerDialog 
+        isOpen={isTagManagerOpen} 
+        onOpenChange={setIsTagManagerOpen} 
       />
     </div>
   );

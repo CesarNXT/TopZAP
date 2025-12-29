@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -33,16 +33,24 @@ export default function LoginPage() {
   });
 
   const { auth, firestore } = initializeFirebase();
+  const isSubmittingRef = useRef(false);
 
   const onSubmit = async (data: LoginFormValues) => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsLoading(true);
     try {
       await signInWithEmailAndPassword(auth, data.email, data.password);
       router.push('/dashboard');
     } catch (error: any) {
+      isSubmittingRef.current = false;
       let description = 'Ocorreu um erro desconhecido. Tente novamente.';
       if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
         description = 'E-mail ou senha incorretos. Verifique seus dados e tente novamente.';
+      } else if (error.code === 'auth/invalid-api-key') {
+        description = 'A chave da API do Firebase é inválida. Verifique sua configuração.';
+      } else {
+        description = `Erro: ${error.message || 'Desconhecido'} (${error.code || 'sem código'})`;
       }
       toast({
         variant: 'destructive',
@@ -103,6 +111,7 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 placeholder="seu@email.com"
+                autoComplete="email"
                 {...register('email')}
               />
               {errors.email && <p className="text-sm text-red-500">{errors.email.message}</p>}
@@ -119,6 +128,7 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="current-password"
                 {...register('password')}
               />
               {errors.password && <p className="text-sm text-red-500">{errors.password.message}</p>}

@@ -3,7 +3,7 @@ export type Contact = {
   userId: string;
   name: string;
   phone: string;
-  segment: 'Regular' | 'Inactive' | 'New';
+  segment: 'Active' | 'Blocked';
   createdAt: any; // Can be string or Firestore Timestamp
   avatarUrl?: string;
   birthday?: string;
@@ -11,6 +11,15 @@ export type Contact = {
   lastReplyAt?: string; // ISO String
   lastContactedAt?: string; // ISO String
   notes?: string;
+  tags?: string[]; // Array of Tag IDs
+};
+
+export type Tag = {
+  id: string;
+  userId: string;
+  name: string;
+  color: string;
+  createdAt: any;
 };
 
 export type Campaign = {
@@ -33,6 +42,7 @@ export type Campaign = {
     failed?: number;
   };
   uazapiId?: string;
+  phones?: string[];
   batchIds?: string[];
   batches?: Record<string, {
     id: string;

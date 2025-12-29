@@ -33,7 +33,7 @@ import { subDays, format, isToday, startOfMonth, endOfMonth, isWithinInterval } 
 import { ptBR } from 'date-fns/locale';
 import { useUser, useCollection, useFirestore } from '@/firebase';
 import { useMemoFirebase } from '@/firebase/provider';
-import { collection, query, orderBy, limit } from 'firebase/firestore';
+import { collection, query, orderBy, limit, where } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 
@@ -69,7 +69,18 @@ export default function DashboardPage() {
 
     const campaignsQuery = useMemoFirebase(() => {
         if (!user) return null;
-        return query(collection(firestore, 'users', user.uid, 'campaigns'), orderBy('sentDate', 'desc'));
+        // Optimization: Limit to last 30 days to save reads
+        // We don't need to load years of campaign history for the dashboard
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const isoDate = thirtyDaysAgo.toISOString();
+
+        return query(
+            collection(firestore, 'users', user.uid, 'campaigns'), 
+            where('sentDate', '>=', isoDate),
+            orderBy('sentDate', 'desc'),
+            limit(100) // Safety cap
+        );
     }, [firestore, user]);
 
     const { data: allCampaigns } = useCollection<Campaign>(campaignsQuery);

@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import {
-  Loader2, Sparkles, FileText, Image as ImageIcon, Music, Plus, Trash, Lock
+  Loader2, Sparkles, FileText, Image as ImageIcon, Music, Plus, Trash, Lock, Video
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -57,9 +57,10 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
       </CardHeader>
       <CardContent className="space-y-4">
          <Tabs defaultValue="text" className="w-full" onValueChange={setMessageType}>
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="text">📝 Só Texto</TabsTrigger>
-                <TabsTrigger value="media">📸 Foto + Legenda</TabsTrigger>
+                <TabsTrigger value="image">📸 Imagem</TabsTrigger>
+                <TabsTrigger value="video">🎥 Vídeo</TabsTrigger>
                 <TabsTrigger value="audio">🎤 Áudio</TabsTrigger>
                 <TabsTrigger value="document">📄 Documento</TabsTrigger>
             </TabsList>
@@ -73,8 +74,22 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                 />
                 <ButtonManager form={form} />
             </TabsContent>
-            <TabsContent value="media" className='pt-4 space-y-4'>
-                <MediaUploadSlot form={form} type="media" fileName={fileName} />
+            <TabsContent value="image" className='pt-4 space-y-4'>
+                <MediaUploadSlot form={form} type="image" fileName={fileName} />
+                <MessageSlot 
+                    form={form} 
+                    label="Legenda" 
+                    placeholder="Digite uma legenda opcional..." 
+                    isOptional 
+                    textareaRef={textareaRef}
+                    onOptimize={onOptimize}
+                    isOptimizing={isOptimizing}
+                    messageValue={messageValue}
+                />
+                <ButtonManager form={form} />
+            </TabsContent>
+            <TabsContent value="video" className='pt-4 space-y-4'>
+                <MediaUploadSlot form={form} type="video" fileName={fileName} />
                 <MessageSlot 
                     form={form} 
                     label="Legenda" 
@@ -89,6 +104,17 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
             </TabsContent>
             <TabsContent value="audio" className='pt-4 space-y-4'>
                  <MediaUploadSlot form={form} type="audio" fileName={fileName} />
+                 <MessageSlot 
+                    form={form} 
+                    label="Mensagem de Texto (Enviada junto com o áudio)" 
+                    placeholder="Digite uma mensagem opcional..." 
+                    isOptional 
+                    textareaRef={textareaRef}
+                    onOptimize={onOptimize}
+                    isOptimizing={isOptimizing}
+                    messageValue={messageValue}
+                />
+                <ButtonManager form={form} />
             </TabsContent>
             <TabsContent value="document" className='pt-4 space-y-4'>
                 <MediaUploadSlot form={form} type="doc" fileName={fileName} />
@@ -102,6 +128,7 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
                     isOptimizing={isOptimizing}
                     messageValue={messageValue}
                 />
+                <ButtonManager form={form} />
             </TabsContent>
         </Tabs>
       </CardContent>
@@ -111,7 +138,7 @@ export function MessageComposer({ form, onOptimize, isOptimizing }: MessageCompo
 
 interface MediaUploadSlotProps {
     form: UseFormReturn<any>;
-    type: 'media' | 'audio' | 'doc';
+    type: 'image' | 'video' | 'audio' | 'doc';
     fileName: string;
 }
 
@@ -130,7 +157,8 @@ function MediaUploadSlot({ form, type, fileName }: MediaUploadSlotProps) {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     onChange={(e) => field.onChange(e.target.files ? e.target.files[0] : null)}
                     accept={
-                        type === 'media' ? 'image/*,video/*' :
+                        type === 'image' ? 'image/*' :
+                        type === 'video' ? 'video/*' :
                         type === 'audio' ? 'audio/*' :
                         type === 'doc' ? '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx' : '*'
                     }
@@ -140,12 +168,14 @@ function MediaUploadSlot({ form, type, fileName }: MediaUploadSlotProps) {
                         <p>{fileName}</p>
                     ) : (
                         <div className='text-center space-y-1'>
-                            { type === 'media' && <ImageIcon className="mx-auto h-8 w-8" /> }
+                            { type === 'image' && <ImageIcon className="mx-auto h-8 w-8" /> }
+                            { type === 'video' && <Video className="mx-auto h-8 w-8" /> }
                             { type === 'audio' && <Music className="mx-auto h-8 w-8" /> }
                             { type === 'doc' && <FileText className="mx-auto h-8 w-8" /> }
                             <p className='text-sm'>
                                 {
-                                    type === 'media' ? 'Clique para anexar Imagem ou Vídeo' :
+                                    type === 'image' ? 'Clique para anexar uma Imagem' :
+                                    type === 'video' ? 'Clique para anexar um Vídeo' :
                                     type === 'audio' ? 'Clique para anexar um Áudio' :
                                     'Clique para anexar um Documento'
                                 }
@@ -225,8 +255,8 @@ function ButtonManager({ form }: { form: UseFormReturn<any> }) {
     const buttons = watch('buttons') || [];
 
     const handleAddButton = () => {
-        // Limit to 2 custom buttons (plus 1 mandatory = 3 total)
-        if (buttons.length >= 2) return;
+        // Limit to 4 custom buttons (plus 1 mandatory = 5 total)
+        if (buttons.length >= 4) return;
         
         // Generate a simple ID
         const newId = 'btn_' + Math.random().toString(36).substring(2, 9);
@@ -255,7 +285,7 @@ function ButtonManager({ form }: { form: UseFormReturn<any> }) {
                     variant="ghost" 
                     size="sm" 
                     onClick={handleAddButton} 
-                    disabled={buttons.length >= 2}
+                    disabled={buttons.length >= 4}
                     className="text-primary hover:text-primary/80"
                 >
                     <Plus className="h-4 w-4 mr-1" /> Adicionar Botão
@@ -278,8 +308,15 @@ function ButtonManager({ form }: { form: UseFormReturn<any> }) {
                             placeholder="Texto do Botão (Ex: Sim, eu quero)" 
                             value={btn.text} 
                             onChange={(e) => handleTextChange(index, e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleAddButton();
+                                }
+                            }}
                             className="flex-1"
-                            maxLength={20} 
+                            maxLength={20}
+                            autoFocus={index === buttons.length - 1 && index > 0}
                         />
                          <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveButton(index)} className="text-muted-foreground hover:text-destructive">
                             <Trash className="h-4 w-4" />
@@ -288,7 +325,7 @@ function ButtonManager({ form }: { form: UseFormReturn<any> }) {
                 ))}
             </div>
              <p className="text-xs text-muted-foreground">
-                Adicione até 2 botões personalizados. O botão "Bloquear Contato" será sempre enviado.
+                Adicione até 4 botões personalizados. O botão "Bloquear Contato" será sempre enviado.
             </p>
         </div>
     );

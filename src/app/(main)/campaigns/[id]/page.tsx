@@ -3,15 +3,15 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useUser, useFirestore, useCollection } from '@/firebase';
-import { doc, onSnapshot, collection, query, orderBy, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, updateDoc, limit, getDocs, startAfter, where } from 'firebase/firestore';
 import { Campaign } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, MessageSquare, ShieldAlert, CheckCircle2, Users, Play, Pause, Trash2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, MessageSquare, ShieldAlert, CheckCircle2, Users, Play, Pause, Trash2, RefreshCw, Square } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { getCampaignMessagesFromProvider, getCampaignsFromProvider, controlCampaign } from '@/app/actions/whatsapp-actions';
-import { deleteCampaignAction, getCampaignInteractionsAction } from '@/app/actions/campaign-actions';
+import { deleteCampaignAction, getCampaignInteractionsAction, getCampaignDispatchesAction } from '@/app/actions/campaign-actions';
 import { useToast } from '@/hooks/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -30,8 +30,78 @@ export default function CampaignReportPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [isControlling, setIsControlling] = useState(false);
     const [interactions, setInteractions] = useState<any[]>([]);
+    
+    // Pagination for Messages
+    const [page, setPage] = useState(1);
+    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    const [loadingMessages, setLoadingMessages] = useState(false);
+
+    // Dispatches State (Detailed Tracking)
+    const [dispatches, setDispatches] = useState<any[]>([]);
+    const [loadingDispatches, setLoadingDispatches] = useState(false);
+    const [hasMoreDispatches, setHasMoreDispatches] = useState(true);
+    const [lastDispatchDoc, setLastDispatchDoc] = useState<any>(null);
 
     const uid = user?.uid;
+
+    // Load Dispatches (Detailed List)
+    const loadDispatches = useCallback(async (isInitial = false, silent = false) => {
+        if (!uid || !id) return;
+        
+        if (isInitial) {
+            if (!silent) setLoadingDispatches(true);
+            // We don't clear dispatches immediately if silent, to avoid flicker
+            if (!silent) setDispatches([]);
+            setLastDispatchDoc(null);
+            setHasMoreDispatches(true);
+        } else {
+            setLoadingDispatches(true);
+        }
+
+        try {
+            const startAfterPhone = !isInitial && lastDispatchDoc ? String(lastDispatchDoc) : undefined;
+            const result = await getCampaignDispatchesAction(uid!, id as string, 50, startAfterPhone);
+            
+            if (result.success && Array.isArray(result.data)) {
+                const newDispatches = result.data;
+                setDispatches(prev => isInitial ? newDispatches : [...prev, ...newDispatches]);
+                setLastDispatchDoc(result.lastPhone || null);
+                setHasMoreDispatches(!!result.hasMore);
+            } else {
+                setHasMoreDispatches(false);
+                if (isInitial && !silent) {
+                    console.log("Dispatches collection might not exist for this campaign yet.");
+                }
+            }
+        } catch (error) {
+            console.error("Error loading dispatches:", error);
+            if (isInitial && !silent) {
+                console.log("Dispatches collection might not exist for this campaign yet.");
+            }
+        } finally {
+            if (!silent) setLoadingDispatches(false);
+        }
+    }, [uid, id, lastDispatchDoc]);
+
+    // Initial Load of Dispatches
+    useEffect(() => {
+        if (uid && id) {
+            loadDispatches(true);
+        }
+    }, [uid, id]); // Run once when ID/User changes
+
+    // Live Refresh of Dispatches when stats change (and user is on first page)
+    useEffect(() => {
+        if (uid && id && campaign?.stats && dispatches.length <= 50) {
+            // Debounce or just call it? Since stats don't change continuously at high rate (except massive campaigns),
+            // and we want "instant" feel, let's call it.
+            // Using a small timeout to ensure Firestore has consistency if the stats update slightly before the collection query
+            const timer = setTimeout(() => {
+                loadDispatches(true, true);
+            }, 1000); 
+            return () => clearTimeout(timer);
+        }
+    }, [campaign?.stats?.sent, campaign?.stats?.delivered, campaign?.stats?.failed, uid, id]);
 
     // Fetch interactions via Server Action (Bypass Security Rules)
     useEffect(() => {
@@ -105,6 +175,8 @@ export default function CampaignReportPage() {
             const messagesResult = await getCampaignMessagesFromProvider(uid, id as string, undefined, 1, 50);
             if (!messagesResult.error && messagesResult.messages) {
                 setMessages(messagesResult.messages);
+                setPage(1);
+                setHasMoreMessages(messagesResult.messages.length === 50);
 
                 // Sync stats to Firestore to ensure list view is updated
                 const msgs = messagesResult.messages;
@@ -136,7 +208,9 @@ export default function CampaignReportPage() {
         } finally {
             setRefreshing(false);
         }
-    }, [uid, id, toast]);
+    }, [uid, id, toast, firestore]);
+
+
 
     // Initial load from provider
     useEffect(() => {
@@ -179,8 +253,8 @@ export default function CampaignReportPage() {
 
         if (result.success) {
             toast({ 
-                title: action === 'stop' ? "Campanha pausada" : "Campanha retomada",
-                description: "O status foi atualizado."
+                title: action === 'stop' ? "Campanha parada" : "Campanha iniciada",
+                description: action === 'stop' ? "O envio foi interrompido." : "O envio foi iniciado com sucesso."
             });
             refreshData();
         } else {
@@ -258,20 +332,22 @@ export default function CampaignReportPage() {
 
     const displayStatus = (status === 'Completed' || status === 'Done') ? 'Concluído' : 
                           status === 'Paused' ? 'Pausado' : 
+                          status === 'Stopped' ? 'Parada' :
                           status === 'Scheduled' ? 'Agendado' :
                           status === 'Sending' ? 'Enviando' : status;
 
-    const canPause = status === 'Scheduled' || status === 'Sending';
-    const canResume = status === 'Paused';
+    // Check if campaign is scheduled for the future
+    const scheduledDate = campaign.scheduledAt ? new Date(campaign.scheduledAt) : new Date();
+    // Allow a small buffer (e.g., 30s) to avoid flickering
+    const isFuture = scheduledDate.getTime() > Date.now() + 30000;
 
-    const formatMessageDate = (timestamp: number) => {
-        if (!timestamp) return '-';
-        // Check if timestamp is in seconds (Unix timestamp) or milliseconds
-        // Unix timestamp for 2024 is around 1.7 billion (10 digits)
-        // Milliseconds timestamp is around 1.7 trillion (13 digits)
-        const isSeconds = timestamp < 100000000000; 
-        return new Date(timestamp * (isSeconds ? 1000 : 1)).toLocaleString();
-    };
+    // A campaign can be started if it's Stopped, Paused, or Scheduled (force start).
+    const canStart = status === 'Scheduled' || status === 'Paused' || status === 'Stopped' || status === 'Draft';
+
+    // A campaign can be stopped only if it's currently sending.
+    const canStop = status === 'Sending';
+
+
 
     const translateStatus = (status: string) => {
         const s = status?.toLowerCase() || '';
@@ -307,14 +383,14 @@ export default function CampaignReportPage() {
                         <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
                         Atualizar
                     </Button>
-                    {canPause && (
-                        <Button variant="outline" size="sm" onClick={() => handleControl('stop')} disabled={isControlling}>
-                            <Pause className="w-4 h-4 mr-2" /> Pausar
+                    {canStart && (
+                        <Button variant="outline" size="sm" onClick={() => handleControl('continue')} disabled={isControlling} className="text-green-600 hover:text-green-700 hover:bg-green-50">
+                            <Play className="w-4 h-4 mr-2" /> Iniciar Agora
                         </Button>
                     )}
-                    {canResume && (
-                        <Button variant="outline" size="sm" onClick={() => handleControl('continue')} disabled={isControlling}>
-                            <Play className="w-4 h-4 mr-2" /> Retomar
+                    {canStop && (
+                        <Button variant="outline" size="sm" onClick={() => handleControl('stop')} disabled={isControlling} className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                            <Square className="w-4 h-4 mr-2 fill-current" /> Parar Envio
                         </Button>
                     )}
                     <Button variant="destructive" size="sm" onClick={() => handleControl('delete')} disabled={isControlling}>
@@ -418,10 +494,10 @@ export default function CampaignReportPage() {
             </div>
 
             {/* Interactions Tabs */}
-            <Tabs defaultValue={batchesList.length > 0 ? "batches" : "messages"} className="w-full">
+            <Tabs defaultValue={batchesList.length > 0 ? "batches" : "dispatches"} className="w-full">
                 <TabsList className="mb-4">
                     {batchesList.length > 0 && <TabsTrigger value="batches">Lotes (Dias)</TabsTrigger>}
-                    <TabsTrigger value="messages">Mensagens</TabsTrigger>
+                    <TabsTrigger value="dispatches">Lista de Envio (Detalhada)</TabsTrigger>
                     <TabsTrigger value="replies">
                         Respostas
                         {replies.length > 0 && <Badge variant="secondary" className="ml-2">{replies.length}</Badge>}
@@ -481,69 +557,78 @@ export default function CampaignReportPage() {
                     </TabsContent>
                 )}
                 
-                <TabsContent value="messages">
+                <TabsContent value="dispatches">
                     <Card>
                         <CardHeader>
-                            <CardTitle>Detalhamento de Mensagens</CardTitle>
-                            <CardDescription>Status individual de cada envio (Últimas 50)</CardDescription>
+                            <CardTitle>Lista de Envio Detalhada</CardTitle>
+                            <CardDescription>Status de todos os contatos da campanha (Agendados e Enviados)</CardDescription>
                         </CardHeader>
                         <CardContent>
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Destinatário</TableHead>
-                                        <TableHead>Mensagem</TableHead>
+                                        <TableHead>Telefone</TableHead>
                                         <TableHead>Status</TableHead>
-                                        <TableHead>Reação</TableHead>
-                                        <TableHead>Data/Hora</TableHead>
-                                        <TableHead>Erro</TableHead>
+                                        <TableHead>Mensagem</TableHead>
+                                        <TableHead>Agendado Para</TableHead>
+                                        <TableHead>Atualizado Em</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {messages.length === 0 ? (
+                                    {dispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={6} className="text-center py-4 text-muted-foreground">
-                                                Nenhuma mensagem encontrada ou carregando...
+                                            <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
+                                                {loadingDispatches ? 'Carregando lista de envio...' : 'Nenhum registro encontrado (Campanha antiga ou vazia).'}
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        messages.map((msg: any) => (
-                                            <TableRow key={msg.id}>
-                                                <TableCell>{msg.sender_pn || msg.chatid || 'Desconhecido'}</TableCell>
-                                                <TableCell className="max-w-[200px] truncate" title={typeof msg.message === 'string' ? msg.message : (msg.message?.text || JSON.stringify(msg.message))}>
-                                                    {typeof msg.message === 'string' ? msg.message : (msg.message?.text || msg.message?.caption || 'Mídia/Outro')}
-                                                </TableCell>
+                                        dispatches.map((dispatch: any) => (
+                                            <TableRow key={dispatch.id}>
+                                                <TableCell>{dispatch.phone}</TableCell>
                                                 <TableCell>
                                                     <Badge variant={
-                                                        msg.status === 'read' ? 'default' :
-                                                        msg.status === 'delivered' ? 'secondary' :
-                                                        msg.status === 'sent' ? 'secondary' :
-                                                        msg.status === 'failed' ? 'destructive' : 'outline'
+                                                        dispatch.status === 'read' ? 'default' :
+                                                        dispatch.status === 'delivered' ? 'secondary' :
+                                                        dispatch.status === 'sent' ? 'secondary' :
+                                                        dispatch.status === 'failed' ? 'destructive' : 
+                                                        dispatch.status === 'scheduled' ? 'outline' : 'outline'
                                                     }>
-                                                        {translateStatus(msg.status)}
+                                                        {translateStatus(dispatch.status)}
                                                     </Badge>
                                                 </TableCell>
-                                                <TableCell>
-                                                    {msg.reaction ? (
-                                                        <span className="text-lg">{msg.reaction}</span>
-                                                    ) : (
-                                                        <span className="text-muted-foreground text-sm">-</span>
-                                                    )}
+                                                <TableCell className="max-w-[200px] truncate" title={dispatch.message}>
+                                                    {dispatch.message}
                                                 </TableCell>
                                                 <TableCell>
-                                                    {formatMessageDate(msg.messageTimestamp)}
+                                                    {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString() : '-'}
                                                 </TableCell>
-                                                <TableCell className="text-red-500 text-sm truncate max-w-[200px]">
-                                                    {msg.error || '-'}
+                                                <TableCell>
+                                                    {dispatch.updatedAt ? new Date(dispatch.updatedAt).toLocaleString() : '-'}
                                                 </TableCell>
                                             </TableRow>
                                         ))
                                     )}
                                 </TableBody>
                             </Table>
+                            {hasMoreDispatches && (
+                                <div className="mt-4 flex justify-center">
+                                    <Button variant="outline" onClick={() => loadDispatches(false)} disabled={loadingDispatches}>
+                                        {loadingDispatches ? (
+                                            <>
+                                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                                Carregando...
+                                            </>
+                                        ) : (
+                                            'Carregar Mais'
+                                        )}
+                                    </Button>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
                 </TabsContent>
+                
+
                 
                 <TabsContent value="replies">
                     <Card>

@@ -1,15 +1,7 @@
 'use client';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { CreditCard, LogOut, Settings, User as UserIcon } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import { useSidebar } from './ui/sidebar';
 import { cn } from '@/lib/utils';
 import { useAuth, useUser } from '@/firebase';
@@ -36,55 +28,30 @@ export function UserMenu() {
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className="flex w-full items-center justify-start gap-2 p-2"
-        >
-            <Avatar className="h-8 w-8">
-              <AvatarImage src={user.photoURL || `https://picsum.photos/seed/${user.uid}/40/40`} alt={user.displayName || 'User'} />
-              <AvatarFallback>{user.displayName?.charAt(0) || user.email?.charAt(0)?.toUpperCase()}</AvatarFallback>
-            </Avatar>
-          
-          <div className={cn('flex flex-col items-start truncate', state === 'collapsed' ? 'hidden' : 'flex')}>
-                <span className="text-sm font-medium truncate">{user.displayName || 'Usuário'}</span>
-                <span className="text-xs text-muted-foreground truncate">
-                    {user.email}
-                </span>
-          </div>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56" align="end" forceMount>
-        <DropdownMenuLabel className="font-normal">
-          <div className="flex justify-between items-center">
-            <div className="flex flex-col space-y-1">
-              <p className="text-sm font-medium leading-none">{user.displayName || 'Usuário'}</p>
-              <p className="text-xs leading-none text-muted-foreground">
-                {user.email}
-              </p>
-            </div>
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem>
-          <UserIcon className="mr-2 h-4 w-4" />
-          <span>Perfil</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <CreditCard className="mr-2 h-4 w-4" />
-          <span>Faturamento</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Settings className="mr-2 h-4 w-4" />
-          <span>Configurações</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={handleSignOut}>
-          <LogOut className="mr-2 h-4 w-4" />
-          <span>Sair</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className="flex w-full items-center justify-between p-2 gap-2">
+      <div className="flex items-center gap-2 overflow-hidden">
+        <Avatar className="h-8 w-8">
+          <AvatarImage src={user.photoURL || `https://picsum.photos/seed/${user.uid}/40/40`} alt={user.displayName || 'User'} />
+          <AvatarFallback>{user.displayName?.charAt(0) || user.email?.charAt(0)?.toUpperCase()}</AvatarFallback>
+        </Avatar>
+        
+        <div className={cn('flex flex-col items-start truncate', state === 'collapsed' ? 'hidden' : 'flex')}>
+              <span className="text-sm font-medium truncate">{user.displayName || 'Usuário'}</span>
+              <span className="text-xs text-muted-foreground truncate">
+                  {user.email}
+              </span>
+        </div>
+      </div>
+      
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={handleSignOut}
+        className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', state === 'collapsed' ? 'hidden' : 'flex')}
+        title="Sair"
+      >
+        <LogOut className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }

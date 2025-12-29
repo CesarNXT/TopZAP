@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "name": "TopZAP DevTools",
+  "description": "App-specific manifest to satisfy Chrome DevTools request and avoid 404 logs.",
+  "homepage": "/"
+}

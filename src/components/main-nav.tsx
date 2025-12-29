@@ -13,13 +13,14 @@ import {
   Users,
   ShieldCheck,
   QrCode,
+  Settings,
 } from 'lucide-react';
 
 const navItems = [
   {
     href: '/dashboard',
     icon: LayoutDashboard,
-    label: 'Painel',
+    label: 'Dashboard',
     selector: '#nav-dashboard'
   },
   {
@@ -35,10 +36,10 @@ const navItems = [
     selector: '#nav-contacts'
   },
   {
-    href: '/whatsapp-connect',
-    icon: QrCode,
-    label: 'Conectar',
-    selector: '#tour-connect-wa'
+    href: '/settings',
+    icon: Settings,
+    label: 'Configurações',
+    selector: '#nav-settings'
   },
 ];
 

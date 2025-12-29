@@ -19,14 +19,16 @@ import {
   getFilteredRowModel,
   Row,
 } from "@tanstack/react-table"
-import type { Contact } from '@/lib/types';
+import type { Contact, Tag } from '@/lib/types';
+import { getTags } from '@/app/actions/tag-actions';
+import { standardizeContactStatuses } from '@/app/actions/migration-actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '../ui/input';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2, UserPlus, User, Search } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2, UserPlus, User, Search, Tag as TagIcon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
@@ -66,10 +68,36 @@ const formatPhoneNumber = (phone: string) => {
 export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, setFilter }: ContactsTableProps) {
     const { toast } = useToast();
     const { user } = useUser();
+    const userId = user?.uid;
     const firestore = useFirestore();
 
     const [contacts, setContacts] = React.useState<Contact[]>([]);
+    const [tags, setTags] = React.useState<Tag[]>([]);
+
+    React.useEffect(() => {
+        if (userId) {
+            getTags(userId).then(res => {
+                if (res.success && res.data) {
+                    setTags(res.data);
+                }
+            });
+        }
+    }, [userId]);
+
     const [isLoading, setIsLoading] = React.useState(true);
+    const [isMigrating, setIsMigrating] = React.useState(false);
+
+    // Auto-run migration on mount to fix legacy statuses
+    React.useEffect(() => {
+        if (userId) {
+            standardizeContactStatuses(userId).then((res) => {
+                if (res.success && res.count > 0) {
+                    loadContacts();
+                }
+            });
+        }
+    }, [userId]);
+
     const [page, setPage] = React.useState(0);
     const [pageCursors, setPageCursors] = React.useState<QueryDocumentSnapshot[]>([]);
     const [pagesCache, setPagesCache] = React.useState<Record<number, Contact[]>>({});
@@ -85,6 +113,28 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
     const [isDeletingMultiple, setIsDeletingMultiple] = React.useState(false);
     
     const PAGE_SIZE = 50;
+
+    const handleMigration = async () => {
+        if (!user?.uid) return;
+        setIsMigrating(true);
+        try {
+            const result = await standardizeContactStatuses(user.uid);
+            if (result.success) {
+                if (result.count > 0) {
+                     toast({ title: 'Sucesso', description: `${result.count} contatos padronizados.` });
+                     loadContacts();
+                } else {
+                     toast({ title: 'Tudo certo', description: 'Todos os contatos já estão padronizados.' });
+                }
+            } else {
+                toast({ title: 'Erro', description: result.error, variant: 'destructive' });
+            }
+        } catch (e) {
+            toast({ title: 'Erro', description: 'Falha na migração.', variant: 'destructive' });
+        } finally {
+            setIsMigrating(false);
+        }
+    };
     
     const handleDeleteRequest = (contact: Contact) => {
       setContactToDelete(contact);
@@ -179,15 +229,14 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         header: "Status",
         cell: ({ row }) => {
           const segment = row.getValue("segment") as string;
-          const segmentMap = {
-            'New': { label: 'Novo', className: 'border-blue-500/80 text-blue-600 bg-blue-500/10' },
-            'Regular': { label: 'Cliente', className: 'border-green-500/80 text-green-600 bg-green-500/10' },
-            'Inactive': { label: 'Bloqueado', className: 'border-gray-400 text-gray-500 bg-gray-500/10' },
-          }
-          const currentSegment = segmentMap[segment as keyof typeof segmentMap] || { label: segment, className: '' };
+          const isBlocked = segment === 'Blocked';
           return (
-              <Badge variant="outline" className={cn('font-medium', currentSegment.className)}>
-                {currentSegment.label}
+              <Badge variant="outline" className={cn('font-medium', 
+                isBlocked 
+                  ? 'border-red-500/80 text-red-600 bg-red-500/10' 
+                  : 'border-green-500/80 text-green-600 bg-green-500/10'
+              )}>
+                {isBlocked ? 'Bloqueado' : 'Ativo'}
               </Badge>
           )
         },
@@ -206,6 +255,51 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         cell: ({ row }) => {
           const date = (row.getValue("createdAt") as any)?.toDate ? (row.getValue("createdAt") as any).toDate() : new Date(row.getValue("createdAt"));
           return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+        }
+      },
+      {
+        accessorKey: "tags",
+        header: "Etiquetas",
+        cell: ({ row }) => {
+            const contactTags = row.original.tags || [];
+            if (contactTags.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+            
+            return (
+                <div className="flex flex-wrap gap-1 max-w-[200px]">
+                    {contactTags.map(tagId => {
+                        const tag = tags.find(t => t.id === tagId);
+                        
+                        if (!tag) {
+                            return (
+                                <Badge 
+                                    key={tagId} 
+                                    variant="outline" 
+                                    className="text-[10px] px-1 py-0 h-5 gap-1 border-dashed border-gray-300 text-gray-400"
+                                    title="Etiqueta excluída"
+                                >
+                                    <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                                    Excluída
+                                </Badge>
+                            );
+                        }
+
+                        return (
+                            <Badge 
+                                key={tagId} 
+                                variant="outline" 
+                                className="text-[10px] px-1 py-0 h-5 gap-1 border-0"
+                                style={{ 
+                                    backgroundColor: tag.color + '20', 
+                                    color: tag.color 
+                                }}
+                            >
+                                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
+                                {tag.name}
+                            </Badge>
+                        );
+                    })}
+                </div>
+            );
         }
       },
       {
@@ -235,7 +329,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
   });
 
   const loadContacts = React.useCallback(async () => {
-      if (!user) return;
+      if (!userId) return;
       
       // Check cache first
       if (pagesCache[page]) {
@@ -246,7 +340,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
       setIsLoading(true);
 
-      const contactsRef = collection(firestore, 'users', user.uid, 'contacts');
+      const contactsRef = collection(firestore, 'users', userId, 'contacts');
       let queries: QueryConstraint[] = [];
 
       // Multi-query search implementation replaced by Client-Side Search for "Contains" support
@@ -263,8 +357,8 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                  let allDocs: any[] = [];
                  let lastDoc = null;
                  let hasMore = true;
-                 const BATCH_SIZE = 5000; // Safe batch size under 10k limit
-                 const MAX_DOCS = 100000; // Increased limit for larger lists
+                 const BATCH_SIZE = 1000; // Optimized batch size
+                 const MAX_DOCS = 2000; // Limit search scope to save costs as per user request
 
                  while (hasMore && allDocs.length < MAX_DOCS) {
                      // Explicitly order by documentId for stable pagination
@@ -321,22 +415,22 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 return nameMatch || phoneMatch;
             });
 
-            // Apply segment filter in memory if active
+            // Apply tag filter in memory if active
             if (filter !== 'all') {
-                const segmentMap: Record<string, string> = {
-                    'blocked': 'Inactive',
-                    'inactive': 'Inactive',
-                    'new': 'New',
-                    'regular': 'Regular'
-                };
-                const mappedSegment = segmentMap[filter] || filter;
-                filtered = filtered.filter(c => c.segment === mappedSegment);
+                if (filter === 'blocked') {
+                    filtered = filtered.filter(c => c.segment === 'Blocked');
+                } else if (filter === 'active') {
+                     filtered = filtered.filter(c => c.segment === 'Active');
+                } else {
+                     // Filter by tag ID
+                     filtered = filtered.filter(c => c.tags && c.tags.includes(filter));
+                }
             }
 
             setContacts(filtered);
             setHasNextPage(false); // Pagination disabled in search mode
             setPagesCache({}); 
-
+            
             // Toast to debug/confirm search scope if it's the first time searching
             if (!allContactsCache) {
                  console.log(`Loaded ${searchSource.length} contacts for search.`);
@@ -353,18 +447,18 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
 
       // Standard Load (No Search Filter)
       if (filter !== 'all') {
-          // If searchTerm is present, we prioritize name search logic and do client-side filtering for segment
+          // If searchTerm is present, we prioritize name search logic and do client-side filtering
           // to avoid composite index requirement.
-          if (!searchTerm) {
-              const segmentMap: Record<string, string> = {
-                  'blocked': 'Inactive',
-                  'inactive': 'Inactive',
-                  'new': 'New',
-                  'regular': 'Regular'
-              };
-              const mappedSegment = segmentMap[filter] || filter; 
-              queries.push(where('segment', '==', mappedSegment));
-          }
+            if (!searchTerm) {
+                if (filter === 'blocked') {
+                    queries.push(where('segment', '==', 'Blocked'));
+                } else if (filter === 'active') {
+                     queries.push(where('segment', '==', 'Active'));
+                } else {
+                     // Filter by tag ID using array-contains
+                     queries.push(where('tags', 'array-contains', filter));
+                }
+            }
       }
       
       // Standard ordering
@@ -391,14 +485,13 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
           // If we have both searchTerm and segment filter, we did NOT apply segment filter in query
           // So we must apply it in memory here
           if (filter !== 'all' && searchTerm) {
-              const segmentMap: Record<string, string> = {
-                  'blocked': 'Inactive',
-                  'inactive': 'Inactive',
-                  'new': 'New',
-                  'regular': 'Regular'
-              };
-              const mappedSegment = segmentMap[filter] || filter;
-              newContacts = newContacts.filter(c => c.segment === mappedSegment);
+              if (filter === 'blocked') {
+                  newContacts = newContacts.filter(c => c.segment === 'Blocked');
+              } else if (filter === 'active') {
+                   newContacts = newContacts.filter(c => c.segment === 'Active');
+              } else {
+                   newContacts = newContacts.filter(c => c.tags && c.tags.includes(filter));
+              }
           }
 
           setContacts(newContacts);
@@ -427,7 +520,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         } finally {
           setIsLoading(false);
       }
-  }, [user, firestore, page, filter, searchTerm, pageCursors, toast, pagesCache]);
+  }, [userId, firestore, page, filter, searchTerm, pageCursors, toast, pagesCache]);
   
   // Reset pagination when filters change
   React.useEffect(() => {
@@ -485,7 +578,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
             <div className="flex items-center gap-2">
                 <Select value={filter} onValueChange={setFilter}>
                     <SelectTrigger className="w-[180px]">
-                        <SelectValue placeholder="Status" />
+                        <SelectValue placeholder="Filtrar por..." />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">
@@ -494,24 +587,37 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                                 <span>Todos</span>
                             </div>
                         </SelectItem>
-                        <SelectItem value="new">
-                            <div className="flex items-center gap-2 text-blue-600">
-                                <UserPlus className="h-4 w-4" />
-                                <span>Novos</span>
-                            </div>
+                        <SelectItem value="active">
+                             <div className="flex items-center gap-2 text-green-600">
+                                 <User className="h-4 w-4" />
+                                 <span>Ativos</span>
+                             </div>
                         </SelectItem>
-                        <SelectItem value="regular">
-                            <div className="flex items-center gap-2 text-green-600">
-                                <User className="h-4 w-4" />
-                                <span>Clientes</span>
-                            </div>
-                        </SelectItem>
-                        <SelectItem value="inactive">
-                            <div className="flex items-center gap-2 text-gray-600">
+                        <SelectItem value="blocked">
+                            <div className="flex items-center gap-2 text-red-600">
                                 <Ban className="h-4 w-4" />
                                 <span>Bloqueados</span>
                             </div>
                         </SelectItem>
+                        {tags.length > 0 && (
+                            <>
+                                <DropdownMenuSeparator />
+                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                                    Etiquetas
+                                </div>
+                                {tags.map(tag => (
+                                    <SelectItem key={tag.id} value={tag.id}>
+                                        <div className="flex items-center gap-2">
+                                            <div 
+                                                className="w-3 h-3 rounded-full" 
+                                                style={{ backgroundColor: tag.color }} 
+                                            />
+                                            <span>{tag.name}</span>
+                                        </div>
+                                    </SelectItem>
+                                ))}
+                            </>
+                        )}
                     </SelectContent>
                 </Select>
 

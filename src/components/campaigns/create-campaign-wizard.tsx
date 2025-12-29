@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { handleOptimizeMessage } from '@/app/actions';
 import type { OptimizeMessageContentOutput } from '@/ai/flows/optimize-message-content';
@@ -36,6 +36,7 @@ import {
 } from '../ui/dialog';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
+import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 import { PhonePreview } from './phone-preview';
 import { cn } from '@/lib/utils';
 import { MessageComposer } from './message-composer';
@@ -43,45 +44,42 @@ import { SpeedSelector } from './speed-selector';
 import { v4 as uuidv4 } from 'uuid';
 import type { Contact, Campaign } from '@/lib/types';
 import { useUser, useFirestore, useCollection } from '@/firebase';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { collection, addDoc, doc, getDoc, setDoc, writeBatch, query, orderBy, limit } from 'firebase/firestore';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { collection, addDoc, doc, getDoc, writeBatch } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
 
-import { createSimpleCampaignForUser, createAdvancedCampaignForUser } from '@/app/actions/whatsapp-actions';
+import { createSimpleCampaignForUser, createAdvancedCampaignForUser, createSimpleCampaignProviderOnly, createAdvancedCampaignProviderOnly } from '@/app/actions/whatsapp-actions';
+import { createTag, getTags, batchAssignTagToContacts } from '@/app/actions/tag-actions';
+import { standardizeContactStatuses } from '@/app/actions/migration-actions';
 import { uploadToCatbox } from '@/app/actions/upload-actions';
 
 const formSchema = z.object({
-  name: z.string().min(5, { message: 'O nome da campanha deve ter pelo menos 5 caracteres.' }),
+  name: z.string().min(1, { message: 'O nome da campanha é obrigatório.' }),
   contactSegment: z.string().optional(),
   selectedContactId: z.string().optional(),
+  selectedTagId: z.string().optional(),
   message: z.string().optional(),
-  sendSpeed: z.string().default('safe'),
+  sendSpeed: z.string().default('slow'),
   buttons: z.array(z.object({
     id: z.string(),
     text: z.string()
-  })).optional(),
+  })).max(4, { message: "Máximo de 4 botões permitidos." }).optional(),
   liabilityAccepted: z.boolean().refine((val) => val === true, {
     message: 'Você deve aceitar os termos de responsabilidade para continuar.',
   }),
   media: z.any().optional(),
-  dailyLimit: z.number().min(10, { message: "O limite deve ser de pelo menos 10 mensagens." }).max(500, { message: "O limite máximo permitido é de 500 mensagens por dia para segurança do seu número." }).default(300),
   startDate: z.string().optional(),
   startHour: z.string().default("08:00"),
-  nextDaysStartHour: z.string().default("08:00"),
+  endHour: z.string().default("18:00"),
 }).refine(data => data.message || data.media, {
     message: "A campanha precisa ter uma mensagem ou um anexo de mídia.",
     path: ['message'],
 }).refine(data => {
     if (!data.contactSegment) return false;
+    if (data.contactSegment === 'tag' && !data.selectedTagId) return false;
     return true;
 }, {
-    message: "Selecione um segmento.",
+    message: "Selecione um segmento ou etiqueta válida.",
     path: ['contactSegment']
 }).refine((data) => {
     if (!data.startDate || !data.startHour) return true;
@@ -97,7 +95,7 @@ const formSchema = z.object({
 const steps = [
     { id: '01', name: 'Destinatários', fields: ['name', 'contactSegment'] },
     { id: '02', name: 'Mensagem', fields: ['message', 'media'] },
-    { id: '03', name: 'Velocidade', fields: ['sendSpeed', 'startDate', 'startHour', 'nextDaysStartHour'] },
+    { id: '03', name: 'Velocidade', fields: ['sendSpeed', 'startDate', 'startHour', 'endHour'] },
     { id: '04', name: 'Confirmar e Enviar' }
 ]
 
@@ -105,22 +103,30 @@ export function CreateCampaignWizard() {
     const router = useRouter();
     const { user } = useUser();
     const firestore = useFirestore();
+
+    // Auto-migration
+    useEffect(() => {
+        if (user?.uid) {
+            standardizeContactStatuses(user.uid);
+        }
+    }, [user?.uid]);
+
     const [currentStep, setCurrentStep] = useState(0);
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [optimizationResult, setOptimizationResult] = useState<OptimizeMessageContentOutput | null>(null);
     const [submitError, setSubmitError] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const isSubmittingRef = useRef(false);
+    const [tags, setTags] = useState<any[]>([]);
+    const [selectedTagId, setSelectedTagId] = useState<string>('');
 
-    // Fetch previous campaigns for "Copy From" feature
-    const campaignsQuery = useMemoFirebase(() => {
-        if (!user) return null;
-        return query(
-            collection(firestore, 'users', user.uid, 'campaigns'),
-            orderBy('createdAt', 'desc'),
-            limit(20)
-        );
-    }, [firestore, user]);
-    const { data: previousCampaigns } = useCollection<Campaign>(campaignsQuery);
+    useEffect(() => {
+        if (user) {
+            getTags(user.uid).then(res => {
+                if (res.success && res.data) setTags(res.data);
+            });
+        }
+    }, [user]);
 
     const contactsQuery = useMemoFirebase(() => {
         if (!user) return null;
@@ -145,14 +151,13 @@ export function CreateCampaignWizard() {
         resolver: zodResolver(formSchema),
         defaultValues: {
             name: '',
-            contactSegment: '',
+            contactSegment: 'all',
             message: '',
-            sendSpeed: 'safe',
+            sendSpeed: 'slow',
             liabilityAccepted: false,
-            dailyLimit: 300,
             startDate: format(new Date(), 'yyyy-MM-dd'),
             startHour: "08:00",
-            nextDaysStartHour: "08:00",
+            endHour: "18:00",
         },
     });
 
@@ -162,25 +167,11 @@ export function CreateCampaignWizard() {
     const sendSpeed = watch('sendSpeed');
     const contactSegment = watch('contactSegment');
     const selectedContactId = watch('selectedContactId');
+    const selectedTagIdForm = watch('selectedTagId');
     const buttons = watch('buttons');
-    const dailyLimit = watch('dailyLimit');
     const startDate = watch('startDate');
     const startHour = watch('startHour');
-    const nextDaysStartHour = watch('nextDaysStartHour');
-
-    const handleCopyCampaign = (campaignId: string) => {
-        const campaign = previousCampaigns?.find(c => c.id === campaignId);
-        if (campaign) {
-            setValue('name', `${campaign.name} (Cópia)`);
-            setValue('message', campaign.message || '');
-            setValue('sendSpeed', campaign.sendSpeed || 'safe');
-            // Check if segment exists or default to individual if not found? 
-            // Better to keep user choice or try to match.
-            // For now, let's copy the message settings mainly.
-            if (campaign.dailyLimit) setValue('dailyLimit', campaign.dailyLimit);
-            toast({ title: "Configurações copiadas", description: "Os dados da campanha anterior foram carregados." });
-        }
-    };
+    const endHour = watch('endHour');
 
     // Calculate Estimations
     const estimation = useMemo(() => {
@@ -193,7 +184,9 @@ export function CreateCampaignWizard() {
                 if (contact) targetContacts = [contact];
             }
         } else if (contactSegment === 'all') {
-            targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
+            targetContacts = validContacts.filter(c => c.segment === 'Active');
+        } else if (contactSegment === 'tag') {
+            targetContacts = validContacts.filter(c => c.segment === 'Active' && c.tags?.includes(selectedTagIdForm || ''));
         } else {
             targetContacts = validContacts.filter(c => c.segment === contactSegment);
         }
@@ -201,49 +194,47 @@ export function CreateCampaignWizard() {
         const totalContacts = targetContacts.length;
         if (totalContacts === 0) return null;
 
-        const limit = dailyLimit || 300;
-        const totalDays = Math.ceil(totalContacts / limit);
-        
         // Speed Calculation (Average seconds per message)
-        let avgSecondsPerMsg = 150; // Safe (120-180s)
-        if (sendSpeed === 'fast') avgSecondsPerMsg = 90; // Normal (60-120s)
-        if (sendSpeed === 'turbo') avgSecondsPerMsg = 70; // Turbo (60-80s)
+        let avgSecondsPerMsg = 110; // Slow (100-120s)
+        if (sendSpeed === 'medium') avgSecondsPerMsg = 90; // Normal (80-100s)
+        if (sendSpeed === 'fast') avgSecondsPerMsg = 70; // Fast (60-80s)
 
-        const batches = [];
-        // Base date calculation
-        let currentBatchDate = startDate ? new Date(startDate + 'T00:00:00') : new Date();
-        
-        // Parse Start Hours
+        // Parse Start/End Hours
         const parseTime = (time: string) => {
              const [h, m] = (time || "08:00").split(':').map(Number);
              return [h || 0, m || 0];
         };
         const [startH, startM] = parseTime(startHour);
-        const [nextH, nextM] = parseTime(nextDaysStartHour);
+        const [endH, endM] = parseTime(endHour);
 
+        // Calculate Daily Window in Seconds
+        // Assuming same day window. If end < start, we treat as invalid or 0 for now (should validate in schema ideally)
+        let dailySeconds = (endH * 3600 + endM * 60) - (startH * 3600 + startM * 60);
+        if (dailySeconds <= 0) dailySeconds = 8 * 3600; // Fallback to 8 hours if invalid
+
+        // Calculate Messages Per Day
+        const msgsPerDay = Math.max(1, Math.floor(dailySeconds / avgSecondsPerMsg));
+
+        const totalDays = Math.ceil(totalContacts / msgsPerDay);
+        
+        const batches = [];
+        // Base date calculation
+        let currentBatchDate = startDate ? new Date(startDate + 'T00:00:00') : new Date();
+        
         // Adjust currentBatchDate to the correct start time for the first day
         currentBatchDate.setHours(startH, startM, 0, 0);
         
         for (let i = 0; i < totalDays; i++) {
-            const isFirstDay = i === 0;
-            const batchSize = Math.min(limit, totalContacts - (i * limit));
+            const batchSize = Math.min(msgsPerDay, totalContacts - (i * msgsPerDay));
             const durationSeconds = batchSize * avgSecondsPerMsg;
             
             // Determine start time for this batch
             let batchStart = new Date(currentBatchDate);
-            if (!isFirstDay) {
-                // For subsequent days, force the time to nextDaysStartHour
-                // currentBatchDate is already incremented by days, now set hours
-                batchStart.setHours(nextH, nextM, 0, 0);
-            } else {
-                 batchStart.setHours(startH, startM, 0, 0);
-            }
+            // Always set to startHour because we increment days
+            batchStart.setHours(startH, startM, 0, 0);
 
             const batchEnd = new Date(batchStart.getTime() + (durationSeconds * 1000));
             
-            // Check for warning: does it end too late? (e.g. after 22:00)
-            const endHour = batchEnd.getHours();
-            const isLate = endHour >= 22 || endHour < 6; // Warning if ends after 10PM or before 6AM (next day)
             const endsNextDay = batchEnd.getDate() !== batchStart.getDate();
 
             batches.push({
@@ -252,7 +243,7 @@ export function CreateCampaignWizard() {
                 count: batchSize,
                 endTime: batchEnd,
                 duration: durationSeconds,
-                isLate,
+                isLate: false, // Window is enforced by math
                 endsNextDay
             });
             
@@ -261,7 +252,7 @@ export function CreateCampaignWizard() {
         }
 
         return batches;
-    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, nextDaysStartHour, dailyLimit]);
+    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, endHour]);
 
 
     const next = async () => {
@@ -275,8 +266,15 @@ export function CreateCampaignWizard() {
     }
 
     const processSubmit = async (values: z.infer<typeof formSchema>) => {
+        if (isSubmitting || isSubmittingRef.current) return;
+        
+        isSubmittingRef.current = true;
+        setIsSubmitting(true);
+        
         if (!user) {
             toast({ variant: "destructive", title: "Erro", description: "Você precisa estar logado para criar uma campanha." });
+            isSubmittingRef.current = false;
+            setIsSubmitting(false);
             return;
         }
         try {
@@ -286,13 +284,53 @@ export function CreateCampaignWizard() {
             const isConnected = data?.uazapi?.connected === true || data?.uazapi?.status === 'connected';
             if (!isConnected) {
                 toast({ variant: "destructive", title: "Erro", description: "Você precisa estar conectado ao WhatsApp para enviar uma campanha." });
+                isSubmittingRef.current = false;
+                setIsSubmitting(false);
                 return;
             }
         } catch (e) {
             toast({ variant: "destructive", title: "Erro", description: "Falha ao verificar conexão com o WhatsApp." });
+            isSubmittingRef.current = false;
+            setIsSubmitting(false);
             return;
         }
-        setIsSubmitting(true);
+
+        // Filter out empty buttons (User Request: "Se o botão ficar vazio não envie")
+        if (values.buttons) {
+            values.buttons = values.buttons.filter(b => b.text && b.text.trim() !== '');
+        }
+
+        // Always add "Bloquear Contato" button if not present
+        // WhatsApp Button messages support up to 3 buttons.
+        if (!values.buttons) values.buttons = [];
+        
+        const hasBlockButton = values.buttons.some(b => b.text.toLowerCase().includes('bloquear') || b.id === 'block_contact');
+        
+        if (!hasBlockButton) {
+            // Ensure we don't exceed limit (if limit is 3, we might need to remove one or warn? For now just push)
+            // Assuming UI limits to 2 custom + 1 mandatory or similar.
+            values.buttons.push({
+                id: 'block_contact',
+                text: 'Bloquear Contato'
+            });
+        }
+
+        // Prepare buttons as choices for UAZAPI
+        const mapButtonsToChoices = (buttons: any[]) => {
+            if (!buttons) return [];
+            return buttons
+                .filter(b => b.text && b.text.trim() !== '') // Filter out empty buttons
+                .map(b => {
+                    // If it's a simple reply button, UAZAPI expects "Text|reply:ID"
+                    // If the ID already contains ':', assume it's fully formed (e.g. copy: or https:)
+                    if (b.id && b.id.includes(':')) {
+                         return `${b.text}|${b.id}`;
+                    }
+                    return `${b.text}|reply:${b.id}`;
+                });
+        };
+
+        const choices = mapButtonsToChoices(values.buttons);
 
         // Prepare messages for uazapi
         const messagesToSend: any[] = [];
@@ -311,60 +349,79 @@ export function CreateCampaignWizard() {
                 const mediaUrl = uploadResult.url;
                 
                 if (values.media.type.startsWith('image/')) {
+                    // Split Image + Text/Buttons to ensure compatibility (like Video/Audio)
                     messagesToSend.push({
-                        image: mediaUrl,
-                        caption: values.message || " ",
-                        type: 'button', // Hint for whatsapp-actions
-                        buttons: values.buttons // Attach buttons
+                        image: mediaUrl, // Standard image field
+                        caption: "", 
+                        type: 'image'
+                    });
+
+                    // Image always followed by text with buttons
+                    messagesToSend.push({
+                        text: values.message || "Confira a imagem acima:",
+                        choices: choices,
+                        type: 'button'
                     });
                 } else if (values.media.type.startsWith('video/')) {
+                     // Split into Video + Text/Buttons to ensure compatibility
                      messagesToSend.push({
-                        video: mediaUrl,
-                        caption: values.message || " ",
-                        type: 'button',
-                        buttons: values.buttons // Attach buttons
+                        file: mediaUrl, // Changed from video to file as per UAZAPI docs
+                        caption: "", 
+                        type: 'video'
                     });
+                    
+                    // Video always followed by text with buttons
+                    messagesToSend.push({
+                        text: values.message || "Confira o vídeo acima:",
+                        choices: choices,
+                        type: 'button'
+                    });
+
                 } else if (values.media.type.startsWith('audio/')) {
                     messagesToSend.push({
-                        audio: mediaUrl,
-                        type: 'ptt' // Force PTT as requested
+                        file: mediaUrl, // Changed from audio to file as per UAZAPI docs
+                        type: 'audio', // Changed from ptt to audio to match docs standard types
+                        ptt: true // Add ptt flag if needed, or rely on type 'audio'
                     });
-                     // If there's a text message with audio, we might need to send it separately or as caption?
-                     // PTT usually doesn't have caption. 
-                     // If user typed a message OR has buttons, we should send it as text after PTT.
-                     if (values.message || (values.buttons && values.buttons.length > 0)) {
-                         messagesToSend.push({
-                             text: values.message || "Selecione uma opção:",
-                             buttons: values.buttons,
-                             type: 'button'
-                         });
-                     }
+                     
+                     // Audio always followed by text with buttons (mandatory block button)
+                     messagesToSend.push({
+                         text: values.message || "Selecione uma opção:",
+                         choices: choices,
+                         type: 'button'
+                     });
                 } else {
                     // Document or other
+                    // Split Document + Text/Buttons
                     messagesToSend.push({
-                        document: mediaUrl,
-                        fileName: values.media.name,
-                        caption: values.message || " ",
-                        buttons: values.buttons // Attach buttons
+                        file: mediaUrl, // Changed from document to file as per UAZAPI docs
+                        docName: values.media.name, // Ensure docName is correct key
+                        fileName: values.media.name, // Keep fileName just in case, but docName is in docs
+                        caption: "", 
+                        type: 'document' 
+                    });
+
+                     messagesToSend.push({
+                        text: values.message || "Segue o documento:",
+                        choices: choices,
+                        type: 'button'
                     });
                 }
             } catch (e: any) {
                 console.error("File upload error", e);
                 toast({ variant: "destructive", title: "Erro no Upload", description: e.message || "Falha ao processar arquivo de mídia." });
+                isSubmittingRef.current = false;
                 setIsSubmitting(false);
                 return;
             }
         } else if (values.message) {
             // Text only
-            if (values.buttons && values.buttons.length > 0) {
-                 messagesToSend.push({
-                     text: values.message,
-                     buttons: values.buttons,
-                     type: 'button'
-                 });
-            } else {
-                messagesToSend.push(values.message);
-            }
+            // Always has buttons now
+            messagesToSend.push({
+                text: values.message,
+                choices: choices,
+                type: 'button'
+            });
         }
 
         // Get active phones
@@ -375,7 +432,9 @@ export function CreateCampaignWizard() {
                 if (contact) targetContacts = [contact];
             }
         } else if (values.contactSegment === 'all') {
-            targetContacts = validContacts.filter(c => c.segment !== 'Inactive');
+            targetContacts = validContacts.filter(c => c.segment === 'Active');
+        } else if (values.contactSegment === 'tag') {
+            targetContacts = validContacts.filter(c => c.segment === 'Active' && c.tags?.includes(values.selectedTagId || ''));
         } else {
             targetContacts = validContacts.filter(c => c.segment === values.contactSegment);
         }
@@ -384,27 +443,71 @@ export function CreateCampaignWizard() {
 
         if (phones.length === 0) {
             toast({ variant: "destructive", title: "Erro", description: "Nenhum contato válido encontrado para enviar." });
+            isSubmittingRef.current = false;
             setIsSubmitting(false);
             return;
         }
 
-        // Call Server Action to Send
-        // Batching Logic for Daily Limits
-        const limit = values.dailyLimit || 300; // Dynamic daily limit
-        const totalContacts = phones.length;
-        const batches = [];
-        
-        for (let i = 0; i < totalContacts; i += limit) {
-            batches.push(phones.slice(i, i + limit));
+        // Auto-Tag Logic: Create/Assign Tag for this Campaign
+        try {
+            const campaignTagName = values.name;
+            const existingTagsRes = await getTags(user.uid);
+            let tagId = '';
+            
+            if (existingTagsRes.success && existingTagsRes.data) {
+                const existingTag = existingTagsRes.data.find((t: any) => t.name.toLowerCase() === campaignTagName.toLowerCase());
+                if (existingTag) {
+                    tagId = existingTag.id;
+                }
+            }
+            
+            if (!tagId) {
+                const colors = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef', '#ec4899', '#f43f5e', '#64748b'];
+                const randomColor = colors[Math.floor(Math.random() * colors.length)];
+                const createRes = await createTag(user.uid, campaignTagName, randomColor);
+                if (createRes.success && createRes.data) {
+                    tagId = createRes.data.id;
+                }
+            }
+
+            if (tagId) {
+                 const contactIds = targetContacts.map(c => c.id);
+                 await batchAssignTagToContacts(user.uid, tagId, contactIds);
+                 console.log(`Assigned tag '${campaignTagName}' to ${contactIds.length} contacts.`);
+            }
+        } catch (err) {
+            console.error("Error in auto-tagging:", err);
+            // Don't block campaign creation if tagging fails, just log it.
         }
 
-        // Parse Start Hours
+        // Call Server Action to Send
+        // Batching Logic for Daily Limits
+        const totalContacts = phones.length;
+        
+        // Speed Calculation (Average seconds per message)
+        let avgSecondsPerMsg = 110; // Slow (100-120s)
+        if (sendSpeed === 'medium') avgSecondsPerMsg = 90; // Normal (80-100s)
+        if (sendSpeed === 'fast') avgSecondsPerMsg = 70; // Fast (60-80s)
+
+        // Parse Start/End Hours
         const parseTime = (time: string) => {
              const [h, m] = (time || "08:00").split(':').map(Number);
              return [h || 0, m || 0];
         };
         const [startH, startM] = parseTime(values.startHour);
-        const [nextH, nextM] = parseTime(values.nextDaysStartHour);
+        const [endH, endM] = parseTime(values.endHour);
+
+        // Calculate Daily Window in Seconds
+        let dailySeconds = (endH * 3600 + endM * 60) - (startH * 3600 + startM * 60);
+        if (dailySeconds <= 0) dailySeconds = 8 * 3600; // Fallback
+
+        // Calculate Messages Per Day
+        const msgsPerDay = Math.max(1, Math.floor(dailySeconds / avgSecondsPerMsg));
+        
+        const batches = [];
+        for (let i = 0; i < totalContacts; i += msgsPerDay) {
+            batches.push(phones.slice(i, i + msgsPerDay));
+        }
 
         // Base date calculation
         let currentBatchDate = values.startDate ? new Date(values.startDate + 'T00:00:00') : new Date();
@@ -415,6 +518,7 @@ export function CreateCampaignWizard() {
         // Validation: Ensure start time is not in the past
         if (currentBatchDate.getTime() < Date.now() - 5 * 60 * 1000) { // 5 min tolerance
             toast({ variant: "destructive", title: "Horário Inválido", description: "O horário de início não pode ser no passado. Por favor, ajuste o horário." });
+            isSubmittingRef.current = false;
             setIsSubmitting(false);
             return;
         }
@@ -432,13 +536,8 @@ export function CreateCampaignWizard() {
             
              // Set time for current batch
             let batchDate = new Date(currentBatchDate);
-            if (i > 0) {
-                 // For subsequent batches (days), use nextDaysStartHour
-                 // currentBatchDate is already incremented by days (at end of loop), now set hours
-                 batchDate.setHours(nextH, nextM, 0, 0);
-            } else {
-                 batchDate.setHours(startH, startM, 0, 0);
-            }
+            // Always set to startHour because we increment days
+            batchDate.setHours(startH, startM, 0, 0);
             
             // Calculate scheduled timestamp (milliseconds)
             const scheduledFor = batchDate.getTime();
@@ -447,28 +546,29 @@ export function CreateCampaignWizard() {
 
             let sendResult;
 
-            // Use Simple Campaign endpoint if we have a single message (User preference/Reliability)
-            if (messagesToSend.length === 1) {
+            // Use Simple Campaign endpoint if we have a single message AND no buttons (User preference/Reliability)
+            const hasButtons = values.buttons && values.buttons.length > 0;
+            const isSimpleMessage = messagesToSend.length === 1 && !hasButtons && typeof messagesToSend[0] === 'string';
+
+            if (isSimpleMessage) {
                 console.log(`[Wizard] Using Simple Campaign for '${batchName}'`);
-                sendResult = await createSimpleCampaignForUser(
+                sendResult = await createSimpleCampaignProviderOnly(
                     user.uid,
                     batchName,
-                    values.sendSpeed as any,
                     messagesToSend[0],
                     batchPhones,
-                    undefined, // info
-                    scheduledFor
+                    scheduledFor,
+                    values.sendSpeed as any
                 );
             } else {
                 console.log(`[Wizard] Using Advanced Campaign for '${batchName}' (Messages: ${messagesToSend.length})`);
-                sendResult = await createAdvancedCampaignForUser(
+                sendResult = await createAdvancedCampaignProviderOnly(
                     user.uid,
-                    values.sendSpeed as any,
+                    batchName,
                     messagesToSend,
                     batchPhones,
-                    undefined,
                     scheduledFor,
-                    values.buttons
+                    values.sendSpeed as any
                 );
             }
 
@@ -488,6 +588,7 @@ export function CreateCampaignWizard() {
                     scheduledAt: new Date(scheduledFor).toISOString(),
                     status: 'Scheduled',
                     count: batchPhones.length,
+                    phones: batchPhones, // Save phones for retry/control
                     stats: { sent: 0, delivered: 0, read: 0, failed: 0 }
                 };
                 successCount++;
@@ -515,33 +616,65 @@ export function CreateCampaignWizard() {
                     userId: user.uid,
                     batchIds: batchIds,
                     batches: batchesMap,
+                    messages: messagesToSend, // Save messages for retry/control
+                    phones: phones, // Save all phones for reference
                     stats: { sent: 0, delivered: 0, read: 0, replied: 0, blocked: 0, failed: 0 }
                 };
 
                 lastDocRef = await addDoc(campaignCollection, newCampaign);
+
+                // Create 'dispatches' subcollection for detailed tracking
+                // This ensures we have a local record of every targeted contact
+                try {
+                    const campaignId = lastDocRef.id;
+                    const batchSize = 500;
+                    const chunks = [];
+                    
+                    // Flatten batches to get all scheduled items with their specific batch info
+                    const allDispatches = [];
+                    Object.values(batchesMap).forEach((batch: any) => {
+                        batch.phones.forEach((phone: string) => {
+                            allDispatches.push({
+                                phone,
+                                batchId: batch.id,
+                                status: 'scheduled', // Initial status
+                                scheduledAt: batch.scheduledAt,
+                                message: messagesToSend.length > 0 ? (typeof messagesToSend[0] === 'string' ? messagesToSend[0] : 'Media/Template') : '',
+                                updatedAt: new Date().toISOString()
+                            });
+                        });
+                    });
+
+                    for (let i = 0; i < allDispatches.length; i += batchSize) {
+                        chunks.push(allDispatches.slice(i, i + batchSize));
+                    }
+
+                    console.log(`[Wizard] Creating ${allDispatches.length} dispatch records in ${chunks.length} batches...`);
+
+                    for (const chunk of chunks) {
+                        const batch = writeBatch(firestore);
+                        chunk.forEach((dispatch) => {
+                            // Use phone as ID for easy lookup, or auto-id if duplicates allowed (but phone as ID prevents dupes per campaign)
+                            const dispatchRef = doc(collection(firestore, 'users', user.uid, 'campaigns', campaignId, 'dispatches')); 
+                            batch.set(dispatchRef, dispatch);
+                        });
+                        await batch.commit();
+                    }
+                    console.log(`[Wizard] All dispatch records created.`);
+
+                } catch (err) {
+                    console.error("Error creating dispatch records:", err);
+                    // Don't fail the whole process, but warn
+                    toast({ variant: "default", title: "Aviso", description: "Campanha criada, mas houve erro ao detalhar lista de envio." });
+                }
 
             } catch (e) {
                 console.error("Error creating campaign doc", e);
                 toast({ variant: "destructive", title: `Erro ao salvar campanha`, description: "A campanha foi enviada mas houve erro ao salvar no histórico." });
             }
 
-            // Update 'New' contacts to 'Regular'
-            const newContacts = targetContacts.filter(c => c.segment === 'New' || c.segment === 'new');
-            if (newContacts.length > 0) {
-                console.log(`[Wizard] Updating ${newContacts.length} contacts from New to Regular...`);
-                const chunkSize = 500;
-                for (let i = 0; i < newContacts.length; i += chunkSize) {
-                    const chunk = newContacts.slice(i, i + chunkSize);
-                    const batch = writeBatch(firestore);
-                    chunk.forEach(contact => {
-                        if (contact.id) {
-                            const contactRef = doc(firestore, 'users', user.uid, 'contacts', contact.id);
-                            batch.update(contactRef, { segment: 'Regular' });
-                        }
-                    });
-                    await batch.commit();
-                }
-            }
+            // Legacy 'New' to 'Active' update block removed as per request to remove legacy statuses.
+            // Only 'Active' contacts are targeted now.
 
             toast({
                 title: "Campanha Agendada!",
@@ -554,6 +687,7 @@ export function CreateCampaignWizard() {
             router.push('/campaigns');
         } else {
             toast({ variant: "destructive", title: "Erro", description: "Falha ao criar campanha." });
+            isSubmittingRef.current = false;
             setIsSubmitting(false);
         }
     }
@@ -597,15 +731,25 @@ export function CreateCampaignWizard() {
             return selectedContactId ? 1 : 0;
         }
         if (contactSegment === 'all') {
-            return validContacts.filter(c => c.segment !== 'Inactive').length;
+            return validContacts.filter(c => c.segment === 'Active').length;
+        }
+        if (contactSegment === 'tag') {
+            return validContacts.filter(c => c.segment === 'Active' && c.tags?.includes(selectedTagId || '')).length;
         }
         return validContacts.filter(c => c.segment === contactSegment).length;
-    }, [contactSegment, validContacts, selectedContactId]);
+    }, [contactSegment, validContacts, selectedContactId, selectedTagId]);
 
-    const blockedCount = useMemo(() => validContacts.filter(c => c.segment === 'Inactive').length, [validContacts]);
+    const blockedCount = useMemo(() => validContacts.filter(c => c.segment === 'Blocked').length, [validContacts]);
 
   return (
-    <>
+    <div className="relative">
+        {isSubmitting && (
+            <div className="absolute inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center flex-col gap-4 h-full min-h-[500px] rounded-lg">
+                <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                <div className="text-lg font-semibold">Criando sua campanha...</div>
+                <p className="text-sm text-muted-foreground">Isso pode levar alguns segundos. Não feche a página.</p>
+            </div>
+        )}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <div className="lg:col-span-2">
             <nav aria-label="Progress" className="mb-8">
@@ -644,25 +788,6 @@ export function CreateCampaignWizard() {
                             <CardDescription>Escolha o status dos contatos que receberão sua mensagem.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
-                            {/* Copy From Campaign */}
-                            {previousCampaigns && previousCampaigns.length > 0 && (
-                                <div className="space-y-2 pb-4 border-b">
-                                    <Label>Copiar de campanha anterior (Opcional)</Label>
-                                    <Select onValueChange={handleCopyCampaign}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Selecione uma campanha para copiar..." />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {previousCampaigns.map(c => (
-                                                <SelectItem key={c.id} value={c.id}>
-                                                    {c.name} ({format(c.createdAt?.toDate() || new Date(), 'dd/MM/yyyy')})
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            )}
-
                             <FormField control={form.control} name="name" render={({ field }) => (
                                 <FormItem>
                                     <FormLabel>Nome da Campanha</FormLabel>
@@ -675,37 +800,93 @@ export function CreateCampaignWizard() {
                                 <FormItem>
                                     <FormLabel>Quem receberá esta campanha?</FormLabel>
                                     <FormControl>
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                                            {/* Option: All Contacts */}
-                                            <Label onClick={() => setValue('contactSegment', 'all', {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === 'all' && 'border-primary ring-2 ring-primary bg-primary/5')}>
-                                                <Users className="w-8 h-8"/>
-                                                <span className="font-bold text-center">Todos os Contatos</span>
-                                                <span className="text-xs text-muted-foreground">
-                                                    {contactsLoading ? (
-                                                        <Loader2 className="h-3 w-3 animate-spin" />
-                                                    ) : (
-                                                        `${validContacts.filter(c => c.segment !== 'Inactive').length} contatos`
+                                        <RadioGroup
+                                            onValueChange={field.onChange}
+                                            defaultValue={field.value}
+                                            value={field.value}
+                                            className="pt-2 flex flex-col gap-4"
+                                        >
+                                            {/* All Contacts Option */}
+                                            <div>
+                                                <RadioGroupItem value="all" id="segment-all" className="peer sr-only" />
+                                                <Label
+                                                    htmlFor="segment-all"
+                                                    className={cn(
+                                                        "border-2 rounded-lg p-4 flex items-center gap-4 h-24 cursor-pointer hover:bg-muted transition-colors",
+                                                        field.value === 'all' ? "border-primary ring-2 ring-primary bg-primary/5" : "border-muted"
                                                     )}
-                                                </span>
-                                            </Label>
-                                            
-                                            {/* Dynamic Segments */}
-                                            {uniqueSegments.map(segment => (
-                                                <Label key={segment} onClick={() => setValue('contactSegment', segment, {shouldValidate: true})} className={cn("border-2 rounded-lg p-4 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary transition-all h-32", field.value === segment && 'border-primary ring-2 ring-primary bg-primary/5')}>
-                                                    <Star className="w-6 h-6"/>
-                                                    <span className="font-bold text-center">
-                                                        {(segment === 'New' || segment === 'new') ? 'Novos Contatos' : segment}
-                                                    </span>
-                                                    <span className="text-xs text-muted-foreground">
+                                                >
+                                                    <div className="bg-primary/10 p-3 rounded-full">
+                                                        <Users className="w-6 h-6 text-primary"/>
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="font-bold text-lg">Todos os Contatos</span>
+                                                        <span className="text-sm text-muted-foreground">
+                                                            Sua campanha será enviada para toda a base de contatos ativos.
+                                                        </span>
+                                                    </div>
+                                                    <div className="ml-auto font-medium text-primary bg-white px-3 py-1 rounded-full border border-primary/20 shadow-sm">
                                                         {contactsLoading ? (
-                                                             <Loader2 className="h-3 w-3 animate-spin" />
+                                                            <Loader2 className="h-3 w-3 animate-spin" />
                                                         ) : (
-                                                            `${validContacts.filter(c => c.segment === segment).length} contatos`
+                                                            `${validContacts.filter(c => c.segment === 'Active').length} contatos`
                                                         )}
-                                                    </span>
+                                                    </div>
                                                 </Label>
-                                            ))}
-                                        </div>
+                                            </div>
+
+                                            {/* Tag Option */}
+                                            <div>
+                                                <RadioGroupItem value="tag" id="segment-tag" className="peer sr-only" />
+                                                <Label
+                                                    htmlFor="segment-tag"
+                                                    className={cn(
+                                                        "border-2 rounded-lg p-4 flex flex-col justify-center gap-2 min-h-24 cursor-pointer hover:bg-muted transition-colors",
+                                                        field.value === 'tag' ? "border-primary ring-2 ring-primary bg-primary/5" : "border-muted"
+                                                    )}
+                                                >
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="bg-primary/10 p-3 rounded-full">
+                                                            <Sparkles className="w-6 h-6 text-primary"/>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <span className="font-bold text-lg">Por Etiqueta</span>
+                                                            <span className="text-sm text-muted-foreground">
+                                                                Selecione contatos com uma etiqueta específica.
+                                                            </span>
+                                                        </div>
+                                                        <div className="ml-auto font-medium text-primary bg-white px-3 py-1 rounded-full border border-primary/20 shadow-sm">
+                                                            {field.value === 'tag' && selectedTagId ? (
+                                                                `${validContacts.filter(c => c.segment === 'Active' && c.tags?.includes(selectedTagId)).length} contatos`
+                                                            ) : (
+                                                                'Selecionar'
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {field.value === 'tag' && (
+                                                        <div className="mt-2 w-full" onClick={(e) => e.stopPropagation()}>
+                                                             <Select value={selectedTagId} onValueChange={(val) => {
+                                                                 setValue('selectedTagId', val);
+                                                                 setSelectedTagId(val);
+                                                             }}>
+                                                                <SelectTrigger>
+                                                                    <SelectValue placeholder="Selecione uma etiqueta..." />
+                                                                </SelectTrigger>
+                                                                <SelectContent>
+                                                                    {tags.map(tag => (
+                                                                        <SelectItem key={tag.id} value={tag.id}>
+                                                                            {tag.name}
+                                                                        </SelectItem>
+                                                                    ))}
+                                                                </SelectContent>
+                                                            </Select>
+                                                        </div>
+                                                    )}
+                                                </Label>
+                                            </div>
+
+                                        </RadioGroup>
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
@@ -737,7 +918,7 @@ export function CreateCampaignWizard() {
                                         Cronograma Estimado de Envio
                                     </CardTitle>
                                     <CardDescription>
-                                        Previsão baseada na velocidade média e limite de {dailyLimit} msg/dia.
+                                        Previsão baseada na velocidade média e janela de envio diária.
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent>
@@ -804,16 +985,16 @@ export function CreateCampaignWizard() {
                                 <div className="mt-2 text-sm text-muted-foreground space-y-1">
                                     <p><strong>Campanha:</strong> {watch('name')}</p>
                                     <p><strong>Destinatários:</strong> {recipientCount} pessoas ({watch('contactSegment')})</p>
-                                    <p><strong>Velocidade:</strong> {watch('sendSpeed') === 'safe' ? '🐢 Segura' : watch('sendSpeed') === 'fast' ? '🐇 Rápida' : '🚀 Turbo'}</p>
+                                    <p><strong>Velocidade:</strong> {watch('sendSpeed') === 'slow' ? '🐢 Lenta' : watch('sendSpeed') === 'medium' ? '🐇 Normal' : '🚀 Rápida'}</p>
                                 </div>
                             </div>
 
-                             {sendSpeed === 'turbo' && (
+                             {sendSpeed === 'fast' && (
                                 <Alert variant="destructive">
                                     <AlertTriangle className="h-4 w-4" />
                                     <AlertTitle>Modo de Alto Risco Ativado!</AlertTitle>
                                     <AlertDescription>
-                                    O Modo Turbo aumenta significativamente a chance de bloqueio do seu número. Use com extrema cautela e apenas para contatos que esperam sua mensagem.
+                                    O Modo Rápido aumenta significativamente a chance de bloqueio do seu número. Use com extrema cautela e apenas para contatos que esperam sua mensagem.
                                     </AlertDescription>
                                 </Alert>
                             )}
@@ -932,6 +1113,6 @@ export function CreateCampaignWizard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }

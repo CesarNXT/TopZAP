@@ -28,18 +28,24 @@ import {
 } from '@/components/ui/table';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { UploadCloud, Sheet, CheckCircle, AlertTriangle, ArrowLeft, Loader2, HelpCircle } from 'lucide-react';
+import { UploadCloud, Sheet, CheckCircle, AlertTriangle, ArrowLeft, Loader2, HelpCircle, Tags } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { useUser, useFirestore, useMemoFirebase, useCollection } from '@/firebase';
+import { collection, query, orderBy } from 'firebase/firestore';
+import type { Tag } from '@/lib/types';
 
 interface CsvImportWizardProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  onImport: (contacts: { name: string; phone: string }[]) => void;
+  onImport: (contacts: { name: string; phone: string }[], tags: string[]) => Promise<void> | void;
 }
 
 const PHONE_REGEX_BR = /^55\d{10,11}$/; // 55 + DDD + 8 ou 9 dígitos
 
 export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWizardProps) {
+  const { user } = useUser();
+  const firestore = useFirestore();
   const [step, setStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
@@ -47,7 +53,18 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
   const [nameColumn, setNameColumn] = useState<string>('');
   const [phoneColumn, setPhoneColumn] = useState<string>('');
   const [defaultDDD, setDefaultDDD] = useState<string>('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const isProcessingRef = React.useRef(false);
+
+  // Fetch Tags
+  const tagsQuery = useMemoFirebase(() => {
+    if (!user) return null;
+    return query(collection(firestore, 'users', user.uid, 'tags'), orderBy('name'));
+  }, [firestore, user]);
+  
+  const { data: tags } = useCollection<Tag>(tagsQuery);
+  const availableTags = tags || [];
 
   const resetWizard = () => {
     setStep(1);
@@ -57,8 +74,18 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
     setNameColumn('');
     setPhoneColumn('');
     setDefaultDDD('');
+    setSelectedTags([]);
     setIsProcessing(false);
   };
+
+  const toggleTag = (tagId: string) => {
+    setSelectedTags(prev => 
+      prev.includes(tagId) 
+        ? prev.filter(id => id !== tagId)
+        : [...prev, tagId]
+    );
+  };
+
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -147,11 +174,18 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
   }, [step, data, nameColumn, phoneColumn, defaultDDD]);
   
   const handleImportClick = async () => {
-    setIsProcessing(true);
-    // In a real app, might have async operations here
-    await new Promise(resolve => setTimeout(resolve, 500)); 
-    onImport(validContacts);
-    setIsProcessing(false);
+    if (isProcessingRef.current) return;
+    
+    try {
+        isProcessingRef.current = true;
+        setIsProcessing(true);
+        await onImport(validContacts, selectedTags);
+    } catch (error) {
+        console.error("Error importing contacts", error);
+    } finally {
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+    }
   };
 
   const handleClose = (open: boolean) => {
@@ -234,6 +268,46 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
                 />
                 <p className="text-xs text-muted-foreground">
                     Será adicionado automaticamente para números com 8 ou 9 dígitos.
+                </p>
+            </div>
+
+            <div className="mt-4 space-y-2">
+                <Label>Etiquetas para aplicar em todos (Opcional)</Label>
+                <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px] bg-background/50">
+                    {availableTags.length === 0 ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground w-full justify-center py-2">
+                             <Tags className="w-4 h-4" />
+                             <span>Nenhuma etiqueta disponível.</span>
+                        </div>
+                    ) : (
+                        availableTags.map(tag => {
+                            const isSelected = selectedTags.includes(tag.id);
+                            return (
+                                <Badge
+                                    key={tag.id}
+                                    variant="outline"
+                                    className={`cursor-pointer select-none gap-1 transition-all hover:opacity-80 px-3 py-1 ${isSelected ? 'shadow-sm' : ''}`}
+                                    style={isSelected ? {
+                                        backgroundColor: tag.color,
+                                        color: '#fff', // Assuming dark text on light bg isn't guaranteed, but white is safe for most generated colors? Actually user picks color. 
+                                        // Let's try to be smart or just use the color as BG.
+                                        borderColor: tag.color
+                                    } : {
+                                        borderColor: tag.color, // + '40' maybe too faint?
+                                        backgroundColor: tag.color + '10', // Light tint
+                                        color: tag.color
+                                    }}
+                                    onClick={() => toggleTag(tag.id)}
+                                >
+                                    {tag.name}
+                                    {isSelected && <CheckCircle className="w-3 h-3 ml-1" />}
+                                </Badge>
+                            );
+                        })
+                    )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    Os contatos importados receberão estas etiquetas automaticamente.
                 </p>
             </div>
 

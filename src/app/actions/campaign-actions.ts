@@ -81,7 +81,8 @@ export async function deleteCampaignAction(userId: string, campaignId: string) {
 
 export async function getCampaignInteractionsAction(userId: string, campaignId: string) {
   try {
-    const snapshot = await db.collection('users').doc(userId).collection('campaigns').doc(campaignId).collection('interactions').orderBy('createdAt', 'desc').get();
+    // Limit to 100 recent interactions
+    const snapshot = await db.collection('users').doc(userId).collection('campaigns').doc(campaignId).collection('interactions').orderBy('createdAt', 'desc').limit(100).get();
     
     const interactions = snapshot.docs.map(doc => ({
       id: doc.id,
@@ -91,6 +92,32 @@ export async function getCampaignInteractionsAction(userId: string, campaignId: 
     return { success: true, data: interactions };
   } catch (error: any) {
     console.error('Error fetching interactions:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getCampaignDispatchesAction(userId: string, campaignId: string, pageSize: number = 50, startAfterPhone?: string) {
+  try {
+    let ref = db
+      .collection('users')
+      .doc(userId)
+      .collection('campaigns')
+      .doc(campaignId)
+      .collection('dispatches')
+      .orderBy('phone')
+      .limit(pageSize);
+
+    if (startAfterPhone) {
+      ref = ref.startAfter(startAfterPhone);
+    }
+
+    const snapshot = await ref.get();
+    const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const lastPhone = snapshot.docs.length > 0 ? String(snapshot.docs[snapshot.docs.length - 1].get('phone')) : undefined;
+
+    return { success: true, data: items, lastPhone, hasMore: snapshot.size === pageSize };
+  } catch (error: any) {
+    console.error('Error fetching dispatches:', error);
     return { success: false, error: error.message };
   }
 }

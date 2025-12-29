@@ -1,5 +1,5 @@
 /**
- * This ruleset enforces a strict user-ownership model for the WhatsConnect application.
+ * This ruleset enforces a strict user-ownership model for the TopZAP application.
  * All user-generated data is stored within a private data tree, ensuring that users can
  * only access and manage their own information.
  *
@@ -127,6 +127,21 @@ service cloud.firestore {
        * @principle Enforces strict data ownership within a user's private subcollection.
        */
       match /contacts/{contactId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isRelationalUserIdCorrect(userId);
+        allow update: if isExistingOwner(userId) && isRelationalUserIdImmutable();
+        allow delete: if isExistingOwner(userId);
+      }
+
+      /**
+       * @description Manages a user's private tags.
+       * @path /users/{userId}/tags/{tagId}
+       * @allow (create) User 'user_abc' creating a new tag.
+       * @allow (list) User 'user_abc' listing their tags.
+       * @principle Enforces strict data ownership within a user's private subcollection.
+       */
+      match /tags/{tagId} {
         allow get: if isOwner(userId);
         allow list: if isOwner(userId);
         allow create: if isOwner(userId) && isRelationalUserIdCorrect(userId);

@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -34,9 +34,13 @@ export default function SignupPage() {
   });
 
   const { auth, firestore } = initializeFirebase();
+  const isSubmittingRef = useRef(false);
 
   const onSubmit = async (data: SignupFormValues) => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsLoading(true);
+
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
       const user = userCredential.user;
@@ -64,6 +68,7 @@ export default function SignupPage() {
         title: 'Falha no Cadastro',
         description,
       });
+      isSubmittingRef.current = false;
       setIsLoading(false);
     }
   };
@@ -117,6 +122,7 @@ export default function SignupPage() {
               <Input
                 id="name"
                 placeholder="Seu nome"
+                autoComplete="name"
                 {...register('name')}
               />
               {errors.name && <p className="text-sm text-red-500">{errors.name.message}</p>}
@@ -127,6 +133,7 @@ export default function SignupPage() {
                 id="email"
                 type="email"
                 placeholder="seu@email.com"
+                autoComplete="email"
                 {...register('email')}
               />
               {errors.email && <p className="text-sm text-red-500">{errors.email.message}</p>}
@@ -137,6 +144,7 @@ export default function SignupPage() {
                 id="password"
                 type="password"
                 placeholder="Mínimo 6 caracteres"
+                autoComplete="new-password"
                 {...register('password')}
               />
               {errors.password && <p className="text-sm text-red-500">{errors.password.message}</p>}

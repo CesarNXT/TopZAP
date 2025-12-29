@@ -20,13 +20,12 @@ interface SpeedSelectorProps {
 
 export function SpeedSelector({ form }: SpeedSelectorProps) {
   const sendSpeedValue = form.watch('sendSpeed');
-  const dailyLimit = form.watch('dailyLimit');
   
   return (
     <Card>
       <CardHeader>
         <CardTitle>Etapa 3: Configurações de Envio</CardTitle>
-        <CardDescription>Defina velocidade, limites e agendamento da campanha.</CardDescription>
+        <CardDescription>Defina velocidade e agendamento da campanha.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-8">
         {/* Speed Selection */}
@@ -43,15 +42,27 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                   className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2"
                 >
                   <FormItem>
-                    <RadioGroupItem value="safe" id="safe" className="sr-only" />
+                    <RadioGroupItem value="slow" id="slow" className="sr-only" />
                     <label
-                      htmlFor="safe"
-                      className={`flex flex-col items-center justify-center rounded-lg border-2 p-4 cursor-pointer transition-all hover:bg-accent ${field.value === 'safe' ? 'border-primary ring-2 ring-primary bg-accent/50' : ''}`}
+                      htmlFor="slow"
+                      className={`flex flex-col items-center justify-center rounded-lg border-2 p-4 cursor-pointer transition-all hover:bg-accent ${field.value === 'slow' ? 'border-primary ring-2 ring-primary bg-accent/50' : ''}`}
                     >
                       <span className="text-4xl mb-2">🐢</span>
-                      <span className="font-bold">Modo Seguro</span>
-                      <span className="text-xs text-muted-foreground mt-1 text-center">120-180s / msg</span>
+                      <span className="font-bold">Modo Lento</span>
+                      <span className="text-xs text-muted-foreground mt-1 text-center">100-120s / msg</span>
                       <span className="text-xs font-semibold text-primary mt-1">Recomendado</span>
+                    </label>
+                  </FormItem>
+                  <FormItem>
+                    <RadioGroupItem value="medium" id="medium" className="sr-only" />
+                    <label
+                      htmlFor="medium"
+                      className={`flex flex-col items-center justify-center rounded-lg border-2 p-4 cursor-pointer transition-all hover:bg-accent ${field.value === 'medium' ? 'border-primary ring-2 ring-primary bg-accent/50' : ''}`}
+                    >
+                      <span className="text-4xl mb-2">🐇</span>
+                      <span className="font-bold">Modo Normal</span>
+                      <span className="text-xs text-muted-foreground mt-1 text-center">80-100s / msg</span>
+                      <span className="text-xs font-semibold text-yellow-600 mt-1">Risco Médio</span>
                     </label>
                   </FormItem>
                   <FormItem>
@@ -59,18 +70,6 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                     <label
                       htmlFor="fast"
                       className={`flex flex-col items-center justify-center rounded-lg border-2 p-4 cursor-pointer transition-all hover:bg-accent ${field.value === 'fast' ? 'border-primary ring-2 ring-primary bg-accent/50' : ''}`}
-                    >
-                      <span className="text-4xl mb-2">🐇</span>
-                      <span className="font-bold">Modo Normal</span>
-                      <span className="text-xs text-muted-foreground mt-1 text-center">60-120s / msg</span>
-                      <span className="text-xs font-semibold text-yellow-600 mt-1">Risco Médio</span>
-                    </label>
-                  </FormItem>
-                  <FormItem>
-                    <RadioGroupItem value="turbo" id="turbo" className="sr-only" />
-                    <label
-                      htmlFor="turbo"
-                      className={`flex flex-col items-center justify-center rounded-lg border-2 p-4 cursor-pointer transition-all hover:bg-accent ${field.value === 'turbo' ? 'border-primary ring-2 ring-primary bg-accent/50' : ''}`}
                     >
                       <span className="text-4xl mb-2">🚀</span>
                       <span className="font-bold">Modo Rápido</span>
@@ -85,7 +84,7 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
           )}
         />
 
-        {sendSpeedValue === 'turbo' && (
+        {sendSpeedValue === 'fast' && (
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Modo de Alto Risco Ativado!</AlertTitle>
@@ -95,44 +94,13 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
           </Alert>
         )}
 
-        {dailyLimit > 300 && (
-            <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Atenção: Limite Alto</AlertTitle>
-            <AlertDescription>
-                Enviar mais de 300 mensagens por dia aumenta drasticamente o risco de bloqueio do seu número. Valores acima de 300 são de sua total responsabilidade.
-            </AlertDescription>
-            </Alert>
-        )}
-
         <div className="border-t pt-6">
             <h3 className="font-medium mb-4 flex items-center gap-2">
                 <Clock className="w-4 h-4" />
-                Limites e Agendamento
+                Agendamento Diário
             </h3>
+            
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <FormField
-                    control={form.control}
-                    name="dailyLimit"
-                    render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Limite Diário</FormLabel>
-                            <FormControl>
-                                <Input 
-                                    type="number" 
-                                    {...field} 
-                                    max={500}
-                                    onChange={e => field.onChange(Number(e.target.value))}
-                                />
-                            </FormControl>
-                            <FormDescription className="text-xs">
-                                Defina quantos contatos serão processados por dia. O padrão recomendado é 300.
-                            </FormDescription>
-                            <FormMessage />
-                        </FormItem>
-                    )}
-                />
-
                 <FormField
                     control={form.control}
                     name="startDate"
@@ -149,20 +117,18 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                         </FormItem>
                     )}
                 />
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+
                 <FormField
                     control={form.control}
                     name="startHour"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Horário de Início (1º Dia)</FormLabel>
+                            <FormLabel>Horário de Início (Diário)</FormLabel>
                             <FormControl>
                                 <Input type="time" {...field} value={field.value || ''} />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Horário para iniciar o envio do primeiro lote.
+                                Hora que inicia os envios todos os dias.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
@@ -171,20 +137,26 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                 
                  <FormField
                     control={form.control}
-                    name="nextDaysStartHour"
+                    name="endHour"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Horário de Início (Próximos Dias)</FormLabel>
+                            <FormLabel>Horário Final (Diário)</FormLabel>
                             <FormControl>
                                 <Input type="time" {...field} value={field.value || ''} />
                             </FormControl>
                             <FormDescription className="text-xs">
-                                Horário para iniciar os lotes dos dias seguintes.
+                                Hora que pausa os envios todos os dias.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
                     )}
                 />
+            </div>
+            
+            <div className="mt-4 p-3 bg-muted/50 rounded-md text-sm text-muted-foreground">
+                <p>
+                    O sistema calculará automaticamente quantos contatos podem ser enviados por dia respeitando o intervalo de tempo entre o Horário de Início e o Horário Final, baseado na velocidade escolhida.
+                </p>
             </div>
         </div>
 
