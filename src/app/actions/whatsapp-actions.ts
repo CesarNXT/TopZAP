@@ -4,42 +4,37 @@ import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
 // Helper to get API URL
-const getApiUrl = () => process.env.UAZAPI_URL || 'https://api.uazapi.com.br';
+const getApiUrl = () => process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
 
 export async function verifyInstanceConnection(token: string) {
     if (!token) return { success: false, error: 'Token is required' };
 
     try {
-        // This is a guess at the endpoint. Adjust based on actual API.
-        // Usually /instance/fetchInstances or similar with Bearer token
-        const response = await fetch(`${getApiUrl()}/instance/fetchInstances`, {
+        const response = await fetch(`${getApiUrl()}/instance/status`, {
             method: 'GET',
             headers: {
                 'token': token,
-                'Content-Type': 'application/json'
+                'Accept': 'application/json'
             }
         });
 
         if (!response.ok) {
-            return { success: false, error: 'Failed to connect to provider' };
+            const errorText = await response.text();
+            console.error('UAZAPI Connection Error:', errorText);
+            return { success: false, error: 'Failed to connect to provider. Check your token.' };
         }
 
         const data = await response.json();
-        // Assume data contains instance info
-        // We return the first instance or the one matching the token
-        const instance = Array.isArray(data) ? data[0] : data;
-
-        if (!instance) {
-             return { success: false, error: 'No instance found' };
-        }
-
+        
+        // Return success with available data
+        // We map the response to our internal structure
         return { 
             success: true, 
             data: {
-                id: instance.instanceName || instance.id || 'default',
-                name: instance.instanceName || 'WhatsApp',
-                profilePicUrl: instance.profilePictureUrl || '',
-                status: instance.status || 'connected'
+                id: data.id || 'default',
+                name: data.instanceName || 'WhatsApp Instance',
+                profilePicUrl: data.profilePictureUrl || '',
+                status: 'connected' // Assumed connected if status call succeeds
             }
         };
     } catch (error: any) {
@@ -50,17 +45,35 @@ export async function verifyInstanceConnection(token: string) {
 
 export async function setWebhook(instanceName: string, token: string, webhookUrl: string) {
     try {
-        const response = await fetch(`${getApiUrl()}/webhook/set/${instanceName}`, {
+        // According to user instructions, the endpoint is /webhook (POST)
+        // and it requires specific body parameters.
+        const response = await fetch(`${getApiUrl()}/webhook`, {
             method: 'POST',
             headers: {
                 'token': token,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
             },
             body: JSON.stringify({
-                webhookUrl: webhookUrl,
-                enabled: true
+                enabled: true,
+                url: webhookUrl,
+                events: [
+                    "messages",
+                    "sender",
+                    "connection"
+                ],
+                excludeMessages: [
+                    "wasSentByApi",
+                    "isGroupYes"
+                ]
             })
         });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('UAZAPI Webhook Error:', errorText);
+            return { success: false, error: `Failed to set webhook: ${response.statusText}` };
+        }
 
         const data = await response.json();
         return { success: true, data };

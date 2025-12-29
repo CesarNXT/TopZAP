@@ -110,15 +110,16 @@ export function WhatsAppSettings() {
             }
 
             // 3. Save to Firestore if valid and connected
+            // Ensure no undefined values are passed to Firestore
             await setDoc(doc(firestore, 'users', user.uid), {
                 uazapi: {
                     token: token.trim(),
                     connected: true,
                     status: 'connected',
                     instanceName: instanceName,
-                    instanceId: instanceData.id,
-                    profilePicUrl: instanceData.profilePicUrl,
-                    profileName: instanceData.profileName,
+                    instanceId: instanceData.id || null,
+                    profilePicUrl: instanceData.profilePicUrl || null,
+                    profileName: instanceData.profileName || instanceData.name || null,
                     updatedAt: new Date().toISOString()
                 }
             }, { merge: true });
