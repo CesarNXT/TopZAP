@@ -321,12 +321,12 @@ export function CreateCampaignWizard() {
             return buttons
                 .filter(b => b.text && b.text.trim() !== '') // Filter out empty buttons
                 .map(b => {
-                    // If it's a simple reply button, UAZAPI expects "Text|reply:ID"
-                    // If the ID already contains ':', assume it's fully formed (e.g. copy: or https:)
+                    // UAZAPI expects "Text|id" for reply buttons
+                    // "Text|copy:code", "Text|call:number", "Text|url:link" for others
                     if (b.id && b.id.includes(':')) {
                          return `${b.text}|${b.id}`;
                     }
-                    return `${b.text}|reply:${b.id}`;
+                    return `${b.text}|${b.id}`;
                 });
         };
 
@@ -349,16 +349,16 @@ export function CreateCampaignWizard() {
                 const mediaUrl = uploadResult.url;
                 
                 if (values.media.type.startsWith('image/')) {
-                    // Split Image + Text/Buttons to ensure compatibility (like Video/Audio)
+                    // Split into Image + Text/Buttons to ensure compatibility (Safety First)
                     messagesToSend.push({
-                        image: mediaUrl, // Standard image field
+                        image: mediaUrl, 
                         caption: "", 
                         type: 'image'
                     });
 
                     // Image always followed by text with buttons
                     messagesToSend.push({
-                        text: values.message || "Confira a imagem acima:",
+                        text: values.message || "", 
                         choices: choices,
                         type: 'button'
                     });
@@ -585,6 +585,7 @@ export function CreateCampaignWizard() {
                 batchesMap[idStr] = {
                     id: idStr,
                     name: batchName,
+                    trackId: sendResult.trackId, // Store the generated trackId
                     scheduledAt: new Date(scheduledFor).toISOString(),
                     status: 'Scheduled',
                     count: batchPhones.length,
@@ -606,6 +607,11 @@ export function CreateCampaignWizard() {
                 const firstBatchId = batchIds[0];
                 const startDate = batchesMap[firstBatchId]?.scheduledAt || new Date().toISOString();
 
+                // Extract trackIds for efficient querying
+                const trackIds = Object.values(batchesMap)
+                    .map((b: any) => b.trackId)
+                    .filter(Boolean);
+
                 const newCampaign: Omit<Campaign, 'id'> = {
                     name: values.name,
                     status: 'Scheduled',
@@ -616,6 +622,7 @@ export function CreateCampaignWizard() {
                     userId: user.uid,
                     batchIds: batchIds,
                     batches: batchesMap,
+                    trackIds: trackIds, // Added for webhook lookup
                     messages: messagesToSend, // Save messages for retry/control
                     phones: phones, // Save all phones for reference
                     stats: { sent: 0, delivered: 0, read: 0, replied: 0, blocked: 0, failed: 0 }

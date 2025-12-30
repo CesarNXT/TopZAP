@@ -5,9 +5,14 @@ import { cleanupInstanceByName, forceDeleteInstance, deleteInstanceByToken } fro
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        // console.log('[Webhook] Received payload:', JSON.stringify(body, null, 2)); // Reduce log noise
+        // console.log('[Webhook] Received payload:', JSON.stringify(body, null, 2));
 
         let { instance, event, data, EventType, instanceName, type, token } = body;
+        
+        // Check Headers for Token if not in body
+        if (!token) {
+            token = request.headers.get('token') || request.headers.get('Token');
+        }
 
         // Unified Parsing Logic
         // 1. Resolve Event Name
@@ -16,7 +21,7 @@ export async function POST(request: Request) {
         else if (!event && EventType) event = EventType;
         else if (!event && type) event = type;
 
-        // console.log(`[Webhook] Resolved event: ${event}`);
+        console.log(`[Webhook] Processing event: ${event} for instance: ${instance} (Token: ${token ? 'Yes' : 'No'})`);
 
         // 2. Resolve Instance Name (String)
         // If 'instance' is an object (common in some UAZAPI versions), try to get name from it
@@ -29,17 +34,14 @@ export async function POST(request: Request) {
         if (!instance && instanceName) instance = instanceName;
         if (!instance && data?.instance) instance = data.instance;
         if (!instance && data?.instanceKey) instance = data.instanceKey;
+        
+        // Debug Log
+        // console.log(`[Webhook] Final Instance Identifier: ${instance}`);
 
-        // console.log(`[Webhook] Resolved instance: ${instance}`);
-
-        // 3. Resolve Data
-        const safeData = data || body || {};
-
-        if (!instance || !event) {
-            console.error('[Webhook] Missing instance or event', { instance, event, bodyKeys: Object.keys(body) });
-            return NextResponse.json({ error: 'Invalid payload', received: body }, { status: 400 });
-        }
-
+        // CRITICAL FIX: Some UAZAPI events (like sender updates) might not send instance name at root
+        // but might send 'instanceId' or we need to infer it. 
+        // If we still don't have instance, check if token is provided, we can find user by token.
+        
         // --- OPTIMIZATION START: Fetch User ONCE ---
         // Instead of fetching inside every if block, we fetch once here.
         // This saves multiple reads if a single payload triggers multiple logical blocks (unlikely but safe)
@@ -49,18 +51,48 @@ export async function POST(request: Request) {
 
         if (instance) {
              const usersRef = db.collection('users');
-             // Limit 1 is crucial for cost/performance even if unique
-             const querySnapshot = await usersRef.where('uazapi.instanceName', '==', instance).limit(1).get();
+             
+             // 1. Try by instanceName
+             let querySnapshot = await usersRef.where('uazapi.instanceName', '==', instance).limit(1).get();
+             
+             // 2. Try by instanceId if name failed
+             if (querySnapshot.empty) {
+                 // console.log(`[Webhook] Instance name match failed for ${instance}. Trying instanceId...`);
+                 querySnapshot = await usersRef.where('uazapi.instanceId', '==', instance).limit(1).get();
+             }
+
              if (!querySnapshot.empty) {
                  userDoc = querySnapshot.docs[0];
                  userId = userDoc.id;
              } else {
-                 console.warn(`[Webhook] No user found for instance ${instance}`);
-                 // If no user, we can't do much for most events.
-                 // But we proceed because some events might be generic (though current logic depends on user)
+                 console.warn(`[Webhook] No user found for instance '${instance}' (checked name and id).`);
+                 // Try loose match if instance seems to be an ID? No, safer to fail but log.
              }
         }
+        
+        // Fallback: If user not found by instance, try by token
+        if (!userDoc && token) {
+             const usersRef = db.collection('users');
+             const querySnapshot = await usersRef.where('uazapi.token', '==', token).limit(1).get();
+             if (!querySnapshot.empty) {
+                 userDoc = querySnapshot.docs[0];
+                 userId = userDoc.id;
+                 instance = userDoc.data().uazapi?.instanceName; // Backfill instance name
+                 console.log(`[Webhook] User found via token. Instance inferred: ${instance}`);
+             } else {
+                 console.warn(`[Webhook] No user found for token: ${token}`);
+             }
+        }
+        
+        // Final fallback: If we still don't have user, we can't process much.
+        if (!userDoc) {
+             console.error(`[Webhook] FATAL: No user found for instance '${instance}' or token. Payload:`, JSON.stringify({ event, instance, type, data: safeData ? 'present' : 'missing' }));
+             // We return 200 to acknowledge receipt and prevent retries for "bad" payloads
+             return NextResponse.json({ success: true, message: 'No user found' });
+        }
         // --- OPTIMIZATION END ---
+
+        const safeData = data || {};
 
         // 1. Handle Connection Updates
         // Added 'LoggedOut' to the check
@@ -194,30 +226,84 @@ export async function POST(request: Request) {
                             // console.log(`[Webhook] Updated contact ${phone} status to ${status}`);
 
                             // --- Update Campaign Stats ---
-                            // Find any ACTIVE or SENDING campaigns that include this phone
-                            // We check 'Sending', 'Scheduled', 'sent', 'Completed' (to catch late receipts)
                             const campaignsRef = userDoc.ref.collection('campaigns');
-                            const activeCampaignsSnapshot = await campaignsRef
-                                .where('status', 'in', ['Sending', 'Scheduled', 'sent', 'Completed']) 
-                                .get();
+                            let campaignDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+                            let matchedByTrackId = false;
 
-                            if (!activeCampaignsSnapshot.empty) {
-                                for (const campDoc of activeCampaignsSnapshot.docs) {
+                            // 1. Try to find campaign by trackId (Precise & Fast)
+                            // UAZAPI usually sends 'trackId' or 'track_id' in the message object
+                            const trackId = msg.trackId || msg.track_id || msg.update?.trackId || msg.update?.track_id;
+                            const sendFolderId = msg.send_folder_id || msg.sendFolderId || msg.folderId || msg.folder_id;
+                            
+                            if (trackId) {
+                                const trackQuery = await campaignsRef
+                                    .where('trackIds', 'array-contains', trackId)
+                                    .limit(1)
+                                    .get();
+                                
+                                if (!trackQuery.empty) {
+                                    campaignDocs = trackQuery.docs;
+                                    matchedByTrackId = true;
+                                    console.log(`[Webhook] Campaign found via trackId: ${trackId}`);
+                                }
+                            }
+
+                            // 1.1 Try by sendFolderId (Campaign ID) if trackId failed
+                            if (!matchedByTrackId && sendFolderId) {
+                                // Try simple campaign match
+                                let folderQuery = await campaignsRef
+                                    .where('uazapiId', '==', sendFolderId)
+                                    .limit(1)
+                                    .get();
+                                
+                                if (folderQuery.empty) {
+                                    // Try batch match (using batchIds array which contains folder_ids of batches)
+                                    folderQuery = await campaignsRef
+                                        .where('batchIds', 'array-contains', sendFolderId)
+                                        .limit(1)
+                                        .get();
+                                }
+
+                                if (!folderQuery.empty) {
+                                    campaignDocs = folderQuery.docs;
+                                    matchedByTrackId = true; // Treat as precise match
+                                    console.log(`[Webhook] Campaign found via sendFolderId: ${sendFolderId}`);
+                                }
+                            }
+
+                            // 2. Fallback: Find any ACTIVE campaigns that might include this phone
+                            // Only run if we didn't find a precise match
+                            if (campaignDocs.length === 0) {
+                                const activeCampaignsSnapshot = await campaignsRef
+                                    .where('status', 'in', ['Sending', 'Scheduled', 'sent', 'Completed']) 
+                                    .get();
+                                campaignDocs = activeCampaignsSnapshot.docs;
+                            }
+
+                            if (campaignDocs.length > 0) {
+                                for (const campDoc of campaignDocs) {
                                     const campData = campDoc.data();
-                                    const phones = campData.phones || [];
-                                    const batchIds = campData.batchIds || [];
                                     
-                                    // Check if phone is in this campaign
-                                    // Optimized: Check main phones array first
-                                    let inCampaign = phones.includes(phone);
-                                    
-                                    // If not found in main array (maybe large campaign?), check batches
-                                    if (!inCampaign && campData.batches) {
-                                        for (const bid of batchIds) {
-                                            const batch = campData.batches[bid];
-                                            if (batch?.phones?.includes(phone)) {
-                                                inCampaign = true;
-                                                break;
+                                    // Optimization: If matched by trackId, we are confident.
+                                    // If not, we must verify phone number exists in campaign.
+                                    let inCampaign = matchedByTrackId;
+
+                                    if (!inCampaign) {
+                                        const phones = campData.phones || [];
+                                        const batchIds = campData.batchIds || [];
+                                        
+                                        // Check if phone is in this campaign
+                                        // Optimized: Check main phones array first
+                                        inCampaign = phones.includes(phone);
+                                        
+                                        // If not found in main array (maybe large campaign?), check batches
+                                        if (!inCampaign && campData.batches) {
+                                            for (const bid of batchIds) {
+                                                const batch = campData.batches[bid];
+                                                if (batch?.phones?.includes(phone)) {
+                                                    inCampaign = true;
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -281,6 +367,14 @@ export async function POST(request: Request) {
 
         // 2. Handle New Messages (Auto-create Contacts)
         if (event === 'MESSAGES_UPSERT' || event === 'messages' || event === 'sender') {
+            
+            // Basic Logging for Sender Events (Campaign Lifecycle)
+            if (event === 'sender') {
+                console.log(`[Webhook] Sender Event received: ${JSON.stringify(safeData)}`);
+                // We don't stop here, we continue processing in case there are messages attached,
+                // but usually 'sender' events are for campaign start/finish notifications.
+            }
+
             const messages = safeData.messages || (safeData.message ? [safeData.message] : []);
 
             for (const msg of messages) {
@@ -296,18 +390,23 @@ export async function POST(request: Request) {
                         // console.warn('[Webhook] Message without remoteJid/chatid skipped:', msg);
                         continue;
                     }
+
+                    const phone = String(remoteJid).replace('@s.whatsapp.net', '');
+                    // console.log(`[Webhook] Processing message for phone: ${phone}, fromMe: ${fromMe}`);
                     
                     // Allow processing 'fromMe' messages as requested by user ("tanto os que eu falar")
                     // if (fromMe) continue; 
                     
+                    // REMOVED BY USER REQUEST: We WANT to register contacts even if sent by API or Me
                     const wasSentByApi = safeData?.wasSentByApi || msg.wasSentByApi;
-                    // if (safeData?.wasSentByApi || msg.wasSentByApi) continue; // Exclude messages sent by API (Removed by user request)
+                    // if (safeData?.wasSentByApi || msg.wasSentByApi) continue; 
                     
-                    if (isGroup || safeData?.isGroup || safeData?.isGroupYes) continue; // Exclude groups
+                    if (isGroup || safeData?.isGroup || safeData?.isGroupYes) {
+                        // console.log(`[Webhook] Skipping group message: ${remoteJid}`);
+                        continue; 
+                    }
                     
                     if (remoteJid === 'status@broadcast') continue;
-
-                    const phone = String(remoteJid).replace('@s.whatsapp.net', '');
                     
                     // Determine Name
                     let contactName = msg.pushName || (msg as any).notifyName || msg.senderName || msg.wa_name;
@@ -325,6 +424,11 @@ export async function POST(request: Request) {
                     // Skip processing if it's an API message, but maybe log it?
                     // User wants to track "who it was sent to".
                     if ((wasSentByApi || fromMe) && userDoc) {
+                         // Check if it's a Campaign Message via TrackID or FolderID
+                         const trackId = msg.trackId || msg.track_id || msg.update?.trackId || msg.update?.track_id;
+                         const sendFolderId = msg.send_folder_id || msg.sendFolderId || msg.folderId || msg.folder_id;
+                         const isCampaignMessage = !!trackId || !!sendFolderId;
+
                          // console.log(`[Webhook] Message sent (API/Manual) to ${phone}. Updating lastContactedAt...`);
                          
                          // Update contact's lastContactedAt
@@ -343,37 +447,79 @@ export async function POST(request: Request) {
                                     const now = Date.now();
                                     const oneHour = 60 * 60 * 1000;
                                     
-                                    if (now - lastContactedAt > oneHour) {
-                                        await contactDoc.ref.update({
-                                            lastContactedAt: new Date().toISOString()
-                                        });
-                                        // console.log(`[Webhook] Marked ${phone} as contacted.`);
+                                    // Only update lastContactedAt for MANUAL messages to avoid flooding from campaigns
+                                    // OR update if it's been a while.
+                                    // User wants to distinguish. 
+                                    const updatePayload: any = {};
+                                    
+                                    if (isCampaignMessage) {
+                                        updatePayload.lastCampaignAt = new Date().toISOString();
+                                    } else {
+                                        // For manual messages, always update to keep "Active" list fresh
+                                        updatePayload.lastContactedAt = new Date().toISOString();
                                     }
+                                    
+                                    if (Object.keys(updatePayload).length > 0) {
+                                        await contactDoc.ref.update(updatePayload);
+                                    }
+                                 } else {
+                                     // MANUAL MESSAGE TO NEW CONTACT?
+                                     // If we send a message to someone new, we should create the contact too!
+                                     // Falling through to creation logic below...
+                                     // BUT creation logic is inside "if (userDoc)" below... wait, this block is also "if (userDoc)"
+                                     // The code structure is:
+                                     // if (wasSentByApi || fromMe) { ... updates ... }
+                                     // ... check block action ...
+                                     // ... check creation ...
+                                     
+                                     // Correct. The creation logic is separate and handles "fromMe" correctly.
+                                 }
 
                                     // --- Update Campaign Dispatch to SENT ---
                                     try {
                                         const campaignsRef = userDoc.ref.collection('campaigns');
-                                        const activeCampaignsSnapshot = await campaignsRef
-                                            .where('status', 'in', ['Sending', 'Scheduled', 'sent', 'Completed']) 
-                                            .get();
+                                        let campaignDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+                                        let matchedByTrackId = false;
 
-                                        if (!activeCampaignsSnapshot.empty) {
-                                            for (const campDoc of activeCampaignsSnapshot.docs) {
+                                        // 1. Try by TrackID
+                                        if (trackId) {
+                                            const trackQuery = await campaignsRef.where('trackIds', 'array-contains', trackId).limit(1).get();
+                                            if (!trackQuery.empty) {
+                                                campaignDocs = trackQuery.docs;
+                                                matchedByTrackId = true;
+                                            }
+                                        }
+
+                                        // 2. Fallback to Active Campaigns
+                                        if (campaignDocs.length === 0) {
+                                            const activeCampaignsSnapshot = await campaignsRef
+                                                .where('status', 'in', ['Sending', 'Scheduled', 'sent', 'Completed']) 
+                                                .get();
+                                            campaignDocs = activeCampaignsSnapshot.docs;
+                                        }
+
+                                        if (campaignDocs.length > 0) {
+                                            for (const campDoc of campaignDocs) {
                                                 const campData = campDoc.data();
-                                                const phones = campData.phones || [];
-                                                const batchIds = campData.batchIds || [];
                                                 
-                                                // Check if phone is in this campaign
-                                                // Optimized: Check main phones array first
-                                                let inCampaign = phones.includes(phone);
+                                                let inCampaign = matchedByTrackId;
                                                 
-                                                // If not found in main array (maybe large campaign?), check batches
-                                                if (!inCampaign && campData.batches) {
-                                                    for (const bid of batchIds) {
-                                                        const batch = campData.batches[bid];
-                                                        if (batch?.phones?.includes(phone)) {
-                                                            inCampaign = true;
-                                                            break;
+                                                if (!inCampaign) {
+                                                    const phones = campData.phones || [];
+                                                    const batchIds = campData.batchIds || [];
+                                                    
+                                                    // Check if phone is in this campaign
+                                                    // Optimized: Check main phones array first
+                                                    inCampaign = phones.includes(phone);
+                                                    
+                                                    // If not found in main array (maybe large campaign?), check batches
+                                                    if (!inCampaign && campData.batches) {
+                                                        for (const bid of batchIds) {
+                                                            const batch = campData.batches[bid];
+                                                            if (batch?.phones?.includes(phone)) {
+                                                                inCampaign = true;
+                                                                break;
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -398,9 +544,6 @@ export async function POST(request: Request) {
                                                             });
                                                             // console.log(`[Webhook] Linked messageId ${msg.key.id} to dispatch for ${phone}`);
                                                         }
-                                                    } else {
-                                                        // Optional: Create dispatch if missing? (Smart Backfill)
-                                                        // Maybe overkill here, kept simple.
                                                     }
                                                 }
                                             }
@@ -408,7 +551,6 @@ export async function POST(request: Request) {
                                     } catch (campError) {
                                         console.error("Error updating campaign stats for sent message", campError);
                                     }
-                                 }
                          } catch (e) {
                              console.error(`[Webhook] Failed to process reply for ${phone}`, e);
                          }
@@ -474,7 +616,9 @@ export async function POST(request: Request) {
                         const contactSnapshot = await contactsRef.where('phone', '==', phone).limit(1).get();
 
                         if (contactSnapshot.empty) {
-                            await contactsRef.add({
+                            console.log(`[Webhook] Contact not found for ${phone}. Creating new contact...`);
+                            
+                            const newContactPayload: any = {
                                 name: contactName,
                                 phone: phone,
                                 email: '',
@@ -482,24 +626,56 @@ export async function POST(request: Request) {
                                 userId: userId,
                                 tags: ['auto-created', 'whatsapp'],
                                 createdAt: new Date().toISOString(),
-                                lastReplyAt: new Date().toISOString()
-                            });
-                            console.log(`[Webhook] Created new contact ${phone} (${contactName}) for user ${userId}`);
+                                lastMessageAt: new Date().toISOString()
+                            };
+                            
+                            // Check if it's a Campaign Message via TrackID or FolderID
+                            const trackId = msg.trackId || msg.track_id || msg.update?.trackId || msg.update?.track_id;
+                            const sendFolderId = msg.send_folder_id || msg.sendFolderId || msg.folderId || msg.folder_id;
+                            const isCampaignMessage = !!trackId || !!sendFolderId;
+
+                            if (isCampaignMessage) {
+                                newContactPayload.tags.push('campaign-contact');
+                                newContactPayload.lastCampaignAt = new Date().toISOString();
+                            }
+
+                            if (fromMe || wasSentByApi) {
+                                // Only set lastContactedAt if it's NOT a campaign message
+                                // or if we want to track campaign sends as contacts (User preference seems to be distinction)
+                                // Let's set it but maybe user filters by tags?
+                                // "Monitoring" implies we want to see them.
+                                if (!isCampaignMessage) {
+                                    newContactPayload.lastContactedAt = new Date().toISOString();
+                                }
+                            } else {
+                                newContactPayload.lastReplyAt = new Date().toISOString();
+                            }
+
+                            try {
+                                const newContactRef = await contactsRef.add(newContactPayload);
+                                console.log(`[Webhook] SUCCESS: Created new contact ${phone} (${contactName}) for user ${userId}. ID: ${newContactRef.id}`);
+                            } catch (createError) {
+                                console.error(`[Webhook] ERROR: Failed to create contact ${phone}`, createError);
+                            }
                         } else {
-                            // Update lastReplyAt for existing contact
-                            const contactDoc = contactSnapshot.docs[0];
-                            const contactData = contactDoc.data();
-                            
-                            // OPTIMIZATION: Throttle writes for lastReplyAt
-                            const lastReplyAt = contactData.lastReplyAt ? new Date(contactData.lastReplyAt).getTime() : 0;
-                            const now = Date.now();
-                            const oneHour = 60 * 60 * 1000;
-                            
-                            if (now - lastReplyAt > oneHour) {
-                                await contactDoc.ref.update({
-                                    lastReplyAt: new Date().toISOString()
-                                });
-                                // console.log(`[Webhook] Updated lastReplyAt for existing contact ${phone}`);
+                            // console.log(`[Webhook] Contact exists for ${phone}. Skipping creation.`);
+                            // Update lastReplyAt for existing contact (ONLY if it's a reply from them)
+                            if (!fromMe && !wasSentByApi) {
+                                const contactDoc = contactSnapshot.docs[0];
+                                const contactData = contactDoc.data();
+                                
+                                // OPTIMIZATION: Throttle writes for lastReplyAt
+                                const lastReplyAt = contactData.lastReplyAt ? new Date(contactData.lastReplyAt).getTime() : 0;
+                                const now = Date.now();
+                                const oneHour = 60 * 60 * 1000;
+                                
+                                if (now - lastReplyAt > oneHour) {
+                                    await contactDoc.ref.update({
+                                        lastReplyAt: new Date().toISOString(),
+                                        lastMessageAt: new Date().toISOString() // Ensure sorting updates too
+                                    });
+                                    // console.log(`[Webhook] Updated lastReplyAt for existing contact ${phone}`);
+                                }
                             }
                         }
 

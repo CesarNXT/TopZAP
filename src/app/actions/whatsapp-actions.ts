@@ -2,6 +2,7 @@
 
 import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import crypto from 'crypto';
 
 // Helper to get API URL
 const getApiUrl = () => process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
@@ -112,7 +113,8 @@ async function createSimpleProviderCampaign(
     message: string,
     phones: string[],
     scheduledAt: number | Date,
-    speed: string
+    speed: string,
+    trackId?: string
 ) {
     let delayMin = 10;
     let delayMax = 30;
@@ -135,12 +137,13 @@ async function createSimpleProviderCampaign(
     // Add 10 seconds buffer
     const scheduledTimestamp = new Date(scheduledAt).getTime() + 10000;
     
-    const payload = {
+    // UAZAPI /sender/simple Payload
+    const payload: any = {
         numbers: formattedPhones,
         type: 'text',
         folder: campaignName,
-        delayMin,
-        delayMax,
+        delayMin: delayMin,
+        delayMax: delayMax,
         scheduled_for: scheduledTimestamp,
         info: campaignName,
         text: message
@@ -171,7 +174,8 @@ async function createAdvancedProviderCampaign(
     messages: any[],
     phones: string[],
     scheduledAt: number | Date,
-    speed: string
+    speed: string,
+    trackId?: string
 ) {
     let delayMin = 10;
     let delayMax = 30;
@@ -200,13 +204,17 @@ async function createAdvancedProviderCampaign(
         });
     });
 
-    const payload = {
-        delayMin,
-        delayMax,
+    // UAZAPI /sender/advanced Payload
+    const payload: any = {
+        delayMin: delayMin,
+        delayMax: delayMax,
         info: campaignName,
         scheduled_for: scheduledTimestamp,
         messages: advancedMessages
     };
+
+    // track_id is NOT supported in /sender/advanced top-level payload according to docs
+    // We rely on folder_id for tracking
 
     console.log('[UAZAPI] Creating Advanced Campaign Payload:', JSON.stringify(payload, null, 2));
 
@@ -244,8 +252,11 @@ export async function createSimpleCampaignProviderOnly(
             throw new Error('Usuário não possui token da UAZAPI configurado.');
         }
 
-        const uazapiId = await createSimpleProviderCampaign(token, campaignName, message, phones, scheduledAt, speed);
-        return { success: true, id: uazapiId };
+        // Generate tracking ID
+        const trackId = crypto.randomUUID();
+
+        const uazapiId = await createSimpleProviderCampaign(token, campaignName, message, phones, scheduledAt, speed, trackId);
+        return { success: true, id: uazapiId, trackId };
     } catch (error: any) {
         console.error('Error creating provider-only simple campaign:', error);
         return { success: false, error: error.message };
@@ -266,8 +277,11 @@ export async function createAdvancedCampaignProviderOnly(
             throw new Error('Usuário não possui token da UAZAPI configurado.');
         }
 
-        const uazapiId = await createAdvancedProviderCampaign(token, campaignName, messages, phones, scheduledAt, speed);
-        return { success: true, id: uazapiId };
+        // Generate tracking ID
+        const trackId = crypto.randomUUID();
+
+        const uazapiId = await createAdvancedProviderCampaign(token, campaignName, messages, phones, scheduledAt, speed, trackId);
+        return { success: true, id: uazapiId, trackId };
     } catch (error: any) {
         console.error('Error creating provider-only advanced campaign:', error);
         return { success: false, error: error.message };
@@ -410,11 +424,12 @@ export async function controlCampaign(userId: string, campaignId: string, action
                              const masterMessages = campaign.messages || [];
                              const masterMessage = campaign.message || '';
                              
+                             const trackId = crypto.randomUUID();
                              let newId = '';
                              if (masterMessages.length > 0) {
-                                 newId = await createAdvancedProviderCampaign(token, batchName, masterMessages, batchPhones, new Date(), speed);
+                                 newId = await createAdvancedProviderCampaign(token, batchName, masterMessages, batchPhones, new Date(), speed, trackId);
                              } else {
-                                 newId = await createSimpleProviderCampaign(token, batchName, masterMessage, batchPhones, new Date(), speed);
+                                 newId = await createSimpleProviderCampaign(token, batchName, masterMessage, batchPhones, new Date(), speed, trackId);
                              }
 
                              // Update Map Keys (Delete old, Add new)
@@ -422,9 +437,15 @@ export async function controlCampaign(userId: string, campaignId: string, action
                                  ...virtualBatch,
                                  id: newId,
                                  uazapiId: newId,
+                                 trackId: trackId,
                                  status: 'Sending',
                                  updatedAt: new Date().toISOString()
                              };
+
+                             // Add trackId to campaign doc for webhook matching
+                             await campaignRef.update({
+                                 trackIds: FieldValue.arrayUnion(trackId)
+                             });
                              
                              await campaignRef.update({
                                  [`batches.${batchId}`]: FieldValue.delete(),
@@ -564,6 +585,7 @@ export async function controlCampaign(userId: string, campaignId: string, action
             }
 
             let newUazapiId = '';
+            const trackId = crypto.randomUUID();
 
             if (type === 'simple') {
                 const message = campaign?.message || '';
@@ -573,7 +595,8 @@ export async function controlCampaign(userId: string, campaignId: string, action
                     message, 
                     phones, 
                     new Date(), // Start NOW
-                    speed
+                    speed,
+                    trackId
                 );
             } else {
                 const messages = campaign?.messages || [];
@@ -583,13 +606,17 @@ export async function controlCampaign(userId: string, campaignId: string, action
                     messages,
                     phones,
                     new Date(), // Start NOW
-                    speed
+                    speed,
+                    trackId
                 );
             }
 
-            // Update with NEW UAZAPI ID
+            // Update with NEW UAZAPI ID and TrackID
             if (newUazapiId) {
-                await campaignRef.update({ uazapiId: newUazapiId });
+                await campaignRef.update({ 
+                    uazapiId: newUazapiId,
+                    trackIds: FieldValue.arrayUnion(trackId)
+                });
             }
         }
 

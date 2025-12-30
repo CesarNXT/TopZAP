@@ -42,6 +42,7 @@ export type Campaign = {
     failed?: number;
   };
   uazapiId?: string;
+  trackIds?: string[];
   phones?: string[];
   batchIds?: string[];
   batches?: Record<string, {
