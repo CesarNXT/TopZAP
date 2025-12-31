@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
+export const dynamic = 'force-dynamic'; // Prevent caching
+
 // Helper to get API URL
 const getApiUrl = () => process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
 
