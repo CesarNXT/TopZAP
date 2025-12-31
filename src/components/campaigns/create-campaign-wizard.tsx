@@ -46,13 +46,13 @@ import type { Contact, Campaign } from '@/lib/types';
 import { useUser, useFirestore, useCollection, useFirebase } from '@/firebase';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { collection, addDoc, doc, getDoc, writeBatch, query, where } from 'firebase/firestore';
+import { uploadFileToStorage } from '@/lib/storage-utils';
 import { useMemoFirebase } from '@/firebase/provider';
 
 import { createSimpleCampaignForUser, createAdvancedCampaignForUser, createSimpleCampaignProviderOnly, createAdvancedCampaignProviderOnly, createManagedCampaign } from '@/app/actions/campaign-actions';
 import { createTag, getTags, batchAssignTagToContacts } from '@/app/actions/tag-actions';
 import { standardizeContactStatuses } from '@/app/actions/migration-actions';
 import { uploadToCatbox } from '@/app/actions/upload-actions';
-import { uploadFileToStorage } from '@/lib/storage-utils';
 import { calculateCampaignSchedule } from '@/lib/campaign-schedule';
 
 import { ScheduleManager } from './schedule-manager';
@@ -107,6 +107,7 @@ const steps = [
 export function CreateCampaignWizard() {
     const router = useRouter();
     const { user } = useUser();
+    const { storage } = useFirebase();
     const firestore = useFirestore();
 
     // Auto-migration
@@ -153,9 +154,6 @@ export function CreateCampaignWizard() {
 
     const { data: activeCampaigns, loading: checkingSchedule } = useCollection<Campaign>(activeCampaignsQuery);
     
-    // Get Firebase Storage instance
-    const { storage } = useFirebase();
-
     // Fallback: If contacts array is empty but loading is true, we should wait.
     // If loading is false and contacts is empty, maybe we should try to fetch via batch if we suspect an issue?
     // But usually simple collection fetch works. The main issue is likely the UI showing 0 during load.
@@ -396,28 +394,31 @@ export function CreateCampaignWizard() {
                 
                 let uploadSuccess = false;
 
-                // 1. Upload directly to Catbox (Server Action) to generate public Link
-                try {
-                    console.log("Starting upload to Catbox...");
-                    const formData = new FormData();
-                    formData.append('reqtype', 'fileupload');
-                    formData.append('fileToUpload', values.media);
-                    
-                    const uploadResult = await uploadToCatbox(formData);
-                    
-                    if (uploadResult && typeof uploadResult === 'object' && 'url' in uploadResult && uploadResult.url) {
-                        mediaUrl = uploadResult.url as string;
-                        uploadSuccess = true;
-                    } else {
-                         const err = (uploadResult && typeof uploadResult === 'object' && 'error' in uploadResult) ? (uploadResult as any).error : "Falha no servidor de upload.";
-                         throw new Error(err);
+                // 1. Upload to Firebase Storage
+                if (storage && user) {
+                    try {
+                        console.log("Starting upload to Firebase Storage...");
+                        // Sanitize filename
+                        const safeName = values.media.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+                        const path = `campaigns/${user.uid}/${Date.now()}_${safeName}`;
+                        
+                        mediaUrl = await uploadFileToStorage(storage, values.media, path);
+                        
+                        if (mediaUrl) {
+                            uploadSuccess = true;
+                            console.log("Firebase Storage upload successful:", mediaUrl);
+                        }
+                    } catch (storageError) {
+                        console.error("Firebase Storage upload failed:", storageError);
+                        throw new Error("Falha no upload do arquivo para o Storage. Tente novamente.");
                     }
-                } catch (catboxError: any) {
-                    console.error("Catbox upload failed:", catboxError);
-                    throw new Error("Falha no upload do arquivo. O serviço de upload (Catbox) falhou.");
+                } else {
+                    throw new Error("Serviço de armazenamento não disponível.");
                 }
 
-                if (!mediaUrl) throw new Error("Falha ao obter URL da mídia.");
+                if (!uploadSuccess || !mediaUrl) {
+                     throw new Error("Falha ao obter URL da mídia após upload.");
+                }
 
                 if (values.media.type.startsWith('image/')) {
                     // Split into Image + Text/Buttons to ensure compatibility (Safety First)

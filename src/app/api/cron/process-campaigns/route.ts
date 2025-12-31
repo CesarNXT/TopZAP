@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
+import { deleteCampaignMedia } from '@/lib/storage-cleanup';
 
 export const dynamic = 'force-dynamic'; // Prevent caching
 

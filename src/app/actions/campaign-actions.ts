@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { deleteCampaignFromProvider } from './whatsapp-actions';
 import { FieldValue } from 'firebase-admin/firestore';
 import { format, addDays, differenceInCalendarDays } from 'date-fns';
+import { deleteCampaignMedia } from '@/lib/storage-cleanup';
 
 import { getNextValidTime, ScheduleRule, calculateCampaignSchedule } from '@/lib/campaign-schedule';
 
