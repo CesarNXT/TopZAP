@@ -406,20 +406,14 @@ export function CreateCampaignWizard() {
                 }
 
                 if (values.media.type.startsWith('image/')) {
-                    // Split into Image + Text/Buttons to ensure compatibility (Safety First)
+                    // Combine Image + Text + Buttons into a single message
+                    // UAZAPI supports imageButton in /send/menu
                     messagesToSend.push({
-                        file: mediaUrl, // Fixed: UAZAPI expects 'file', not 'image'
-                        caption: "", 
-                        type: 'image'
-                    });
-
-                    // Image followed by text/buttons ONLY if they exist
-                    // FIX: Always send button message to ensure Block button is included
-                    messagesToSend.push({
-                        text: values.message || "Imagem recebida", 
-                        choices: choices || [],
-                        type: 'button'
-                    });
+                         file: mediaUrl,
+                         text: values.message || " ", 
+                         choices: choices || [],
+                         type: 'image' // Cron job will convert to button+imageButton if choices exist
+                     });
 
                 } else if (values.media.type.startsWith('video/')) {
                      // Split into Video + Text/Buttons to ensure compatibility

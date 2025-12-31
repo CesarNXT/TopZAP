@@ -124,7 +124,7 @@ function transformMessageForButtons(message: any): any[] {
             type: 'button',
             text: transformed.text,
             choices: existingChoices,
-            footerText: transformed.footerText || 'Opções'
+            footerText: transformed.footerText || ' '
         }];
     }
 
@@ -137,10 +137,10 @@ function transformMessageForButtons(message: any): any[] {
 
         return [{
             type: 'button',
-            text: transformed.text || 'Imagem', // Caption is required for button message text
+            text: transformed.text || ' ', // Use space if no text provided
             imageButton: transformed.file || transformed.url,
             choices: existingChoices,
-            footerText: transformed.footerText || 'Opções'
+            footerText: transformed.footerText || ' '
         }];
     }
 
@@ -148,9 +148,9 @@ function transformMessageForButtons(message: any): any[] {
     if (['video', 'document', 'audio', 'ptt', 'sticker'].includes(transformed.type)) {
         const buttonMsg = {
             type: 'button',
-            text: 'Escolha uma opção:',
+            text: ' ',
             choices: [mandatoryButton],
-            footerText: 'Opções'
+            footerText: ' '
         };
         return [transformed, buttonMsg];
     }

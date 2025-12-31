@@ -210,19 +210,30 @@ export async function GET(request: Request) {
                         }
 
                         if (payload.choices && Array.isArray(payload.choices)) {
-                             payload.choices = payload.choices.map((choice: string) => {
-                                 if (choice.includes('|')) {
-                                     const parts = choice.split('|');
-                                     const label = parts[0];
-                                     const id = parts.slice(1).join('|');
-                                     if (id.includes(`_camp_${campaignId}`)) return choice;
-                                     return `${label}|${id}_camp_${campaignId}`;
-                                 } else {
-                                     const slug = choice.toLowerCase().replace(/[^a-z0-9]/g, '_');
-                                     return `${choice}|${slug}_camp_${campaignId}`;
-                                 }
-                             });
-                        }
+                                payload.choices = payload.choices.map((choice: string) => {
+                                    if (choice.includes('|')) {
+                                        const parts = choice.split('|');
+                                        const label = parts[0];
+                                        const id = parts.slice(1).join('|');
+                                        
+                                        // SAFETY: Do not append campaign ID to special button types (URL, Call, Copy)
+                                        // These types do not return a webhook event with ID anyway, and appending breaks them.
+                                        if (id.startsWith('http') || 
+                                            id.startsWith('url:') || 
+                                            id.startsWith('call:') || 
+                                            id.startsWith('copy:')) {
+                                            return choice;
+                                        }
+
+                                        if (id.includes(`_camp_${campaignId}`)) return choice;
+                                        return `${label}|${id}_camp_${campaignId}`;
+                                    } else {
+                                        // Simple text button - Safe to create ID
+                                        const slug = choice.toLowerCase().replace(/[^a-z0-9]/g, '_');
+                                        return `${choice}|${slug}_camp_${campaignId}`;
+                                    }
+                                });
+                            }
 
                         if (['image', 'video', 'audio', 'document', 'sticker'].includes(payload.type)) {
                              if (!payload.file && payload.image) payload.file = payload.image;

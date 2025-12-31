@@ -34,10 +34,17 @@ const formatPhoneNumberForDB = (phone: string | undefined | null): string => {
         }
     }
     
-    // User request: "remove o padrão é 12 digitos... remove esse kralho de 9"
-    // We REMOVED the logic that strips the 9th digit.
-    // We now accept the number EXACTLY as provided (after 55 check).
-    // If user provides 12 digits, we keep 12. If 13, we keep 13.
+    // 3. Enforce 12 digits for Brazil (Remove 9th digit if present)
+    // User explicitly requested: "o padrão é 12 digitos... remove esse kralho de 9"
+    // This means we must STRIP the 9 to ensure 12 digits.
+    if (cleaned.startsWith('55') && cleaned.length === 13) {
+        // 55 (2) + DDD (2) + 9 (1) + 8 digits = 13
+        // The 9 is at index 4 (0-based: 0,1 are 55; 2,3 are DDD; 4 is 9)
+        // We strip the digit at index 4 if it is a '9'.
+        if (cleaned[4] === '9') {
+             cleaned = cleaned.substring(0, 4) + cleaned.substring(5);
+        }
+    }
     
     return cleaned;
 };

@@ -182,19 +182,25 @@ export async function createManagedCampaign(input: CreateManagedCampaignInput) {
 
     // --- INJECT CAMPAIGN ID & ENSURE BLOCK BUTTON ---
     // This ensures we can track exactly which campaign a button click came from.
-    // User Requirement: "Block Contact" button MUST be present on ALL messages (Text, Image, Video).
-    // For Audio (which doesn't support buttons), we append a separate options message.
+    // User Requirement: "Block Contact" button MUST be present on ALL messages.
+    // Rule:
+    // - Text/Image: Single message with buttons.
+    // - Audio/Video/Document: Two messages (Media + Text with Buttons).
 
     const processedTemplate: any[] = [];
 
-    messageTemplate.forEach((msg: any) => {
+    // Convert to loop to allow lookahead
+    for (let i = 0; i < messageTemplate.length; i++) {
+        const msg = messageTemplate[i];
         const newMsg = { ...msg };
         const type = newMsg.type || (newMsg.text ? 'text' : 'unknown');
         
         // Check if this message type supports attached buttons (Interactive Message)
-        // Note: 'image' and 'video' can become 'media menu'. 'text' becomes 'text menu'.
-        // 'audio'/'ptt' cannot have buttons attached directly.
-        const supportsButtons = ['text', 'image', 'video'].includes(type);
+        // User Standard:
+        // - Text: Yes
+        // - Image: Yes (via button+imageButton)
+        // - Video, Audio, Document: NO (must split)
+        const supportsButtons = ['text', 'image', 'button'].includes(type);
 
         if (supportsButtons) {
             // Ensure choices array exists
@@ -241,19 +247,28 @@ export async function createManagedCampaign(input: CreateManagedCampaignInput) {
             processedTemplate.push(newMsg);
 
         } else {
-            // Message types that DO NOT support buttons (Audio, Sticker, etc.)
+            // Message types that DO NOT support buttons (Audio, Video, Document, etc.)
             processedTemplate.push(newMsg);
 
-            // Force append a text message with Block button
-            // This satisfies "obrigatorio em todas as mensagens" for Audio/Sticker
-            const blockBtnId = `block_contact_camp_${campaignId}`;
-            processedTemplate.push({
-                type: 'text',
-                text: 'Opções:',
-                choices: [`Bloquear Contato|${blockBtnId}`]
-            });
+            // Check if the NEXT message is a button message that will carry the block button
+            const nextMsg = messageTemplate[i + 1];
+            let nextSupportsButtons = false;
+            if (nextMsg) {
+                const nextType = nextMsg.type || (nextMsg.text ? 'text' : 'unknown');
+                nextSupportsButtons = ['text', 'image', 'button'].includes(nextType);
+            }
+
+            // Only force append a separate block message if the next message won't handle it
+            if (!nextSupportsButtons) {
+                const blockBtnId = `block_contact_camp_${campaignId}`;
+                processedTemplate.push({
+                    type: 'button', // Use 'button' type explicitly
+                    text: ' ', // Use space to avoid "Opções:" text but satisfy "text required"
+                    choices: [`Bloquear Contato|${blockBtnId}`]
+                });
+            }
         }
-    });
+    }
 
     // Create Campaign Document with processed template
     const finalCampaignDoc = {
