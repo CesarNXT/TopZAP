@@ -26,7 +26,7 @@ import { Badge } from '../ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Loader2, Search, PlusCircle, Play, Pause, Trash2, Check, Eye, X } from 'lucide-react';
+import { MoreHorizontal, Loader2, Search, PlusCircle, Play, Pause, Trash2, Check, Eye, X, CheckCircle2, MessageSquare, ShieldAlert, Image as ImageIcon, Video, FileText, Mic } from 'lucide-react';
 import Link from 'next/link';
 import { useCollection } from '@/firebase';
 import { useUser } from '@/firebase';
@@ -37,7 +37,6 @@ import { deleteCampaignAction } from '@/app/actions/campaign-actions';
 import { controlCampaign } from '@/app/actions/whatsapp-actions';
 import { useToast } from '@/hooks/use-toast';
 import { useState, useEffect } from 'react';
-import { getCampaignsFromProvider } from '@/app/actions/whatsapp-actions';
 
 const CampaignActionsCell = ({ campaign }: { campaign: Campaign }) => {
     const { user } = useUser();
@@ -102,7 +101,7 @@ const CampaignActionsCell = ({ campaign }: { campaign: Campaign }) => {
                 {canStart && (
                     <DropdownMenuItem onClick={() => handleControl('continue')} disabled={isControlling} className="cursor-pointer">
                         <Play className="mr-2 h-4 w-4" />
-                        <span>Iniciar Agora</span>
+                        <span>{status === 'paused' ? 'Retomar Envio' : 'Iniciar Agora'}</span>
                     </DropdownMenuItem>
                 )}
 
@@ -138,45 +137,12 @@ const CampaignProgressCell = ({ campaign }: { campaign: Campaign }) => {
         }
     }, [campaign.stats]);
 
-    useEffect(() => {
-        if (!user || !campaign.uazapiId) return;
-        
-        const fetchStats = async () => {
-            const res = await getCampaignsFromProvider(user.uid);
-            if (res.success && Array.isArray(res.data)) {
-                // Find by UAZAPI ID (folderId)
-                const remote = res.data.find((c: any) => c.id === campaign.uazapiId || c.folderId === campaign.uazapiId);
-                if (remote) {
-                    // Map UAZAPI stats to our format
-                    // Prioritize log_sent (sent to provider) over log_total (total recipients)
-                    const newStats = {
-                        sent: remote.log_sent || remote.log_success || 0,
-                        delivered: remote.log_delivered || 0,
-                        read: remote.log_read || 0,
-                        failed: remote.log_failed || 0,
-                    };
-                    setStats(newStats);
-                }
-            }
-        };
-
-        // Always fetch on mount/update to ensure fresh data
-        fetchStats();
-        
-        const status = (campaign.status || '').toLowerCase();
-        
-        // Poll if active or recently finished to catch late delivery reports
-        // Polling every 5s for better responsiveness
-        if (status === 'sending' || status === 'scheduled' || status === 'sent' || status === 'completed') {
-            const interval = setInterval(fetchStats, 5000);
-            return () => clearInterval(interval);
-        }
-    }, [user, campaign.uazapiId, campaign.status]);
-
     const delivered = stats?.delivered || 0;
     const read = stats?.read || 0;
     const failed = stats?.failed || 0;
     const sent = stats?.sent || 0;
+    const replied = stats?.replied || 0;
+    const blocked = stats?.blocked || 0;
     
     // Calculate total processed (attempted)
     const countFromStats = sent + delivered + read + failed;
@@ -184,7 +150,8 @@ const CampaignProgressCell = ({ campaign }: { campaign: Campaign }) => {
     
     // Use stats count if available, otherwise campaign count
     const count = hasStats ? countFromStats : (campaign.count || 0);
-    const recipients = campaign.recipients || 1;
+    // Use stats.total (Managed) or recipients field (Legacy) or fallback to 1 to avoid division by zero
+    const recipients = campaign.stats?.total || campaign.recipients || 1;
     
     // Calculate percentage (clamp to 100)
     const percentage = recipients > 0 ? Math.min(100, Math.round((count / recipients) * 100)) : 0;
@@ -193,24 +160,27 @@ const CampaignProgressCell = ({ campaign }: { campaign: Campaign }) => {
     const successCount = sent + delivered + read;
 
     return (
-        <div className="flex flex-col gap-2 w-[180px]">
-            <div className="flex justify-between text-xs text-muted-foreground">
-                <Progress value={percentage} className="h-2 w-20" />
-                <span className="ml-2">{count}/{recipients}</span>
+        <div className="flex flex-col gap-2 min-w-[200px]">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <div className="flex items-center gap-2">
+                    <Progress value={percentage} className="h-2 w-24" />
+                    <span>{percentage}%</span>
+                </div>
             </div>
-            <div className="flex gap-3 text-xs text-muted-foreground">
-                 <div className="flex items-center gap-1 text-green-600" title="Enviado/Entregue">
-                     <Check className="w-3 h-3" />
-                     <span>{successCount}</span>
-                 </div>
-                 <div className="flex items-center gap-1 text-blue-600" title="Lido">
-                     <Eye className="w-3 h-3" />
-                     <span>{read}</span>
-                 </div>
-                 <div className="flex items-center gap-1 text-red-600" title="Falhou">
-                     <X className="w-3 h-3" />
-                     <span>{failed}</span>
-                 </div>
+            
+            <div className="flex items-center gap-2">
+                 <Badge variant="outline" className="px-2 py-0.5 h-6 text-xs font-medium border-green-200 bg-green-50 text-green-700 gap-1" title="Entregues">
+                     <CheckCircle2 className="w-3 h-3" /> 
+                     {successCount}
+                 </Badge>
+                 <Badge variant="outline" className="px-2 py-0.5 h-6 text-xs font-medium border-blue-200 bg-blue-50 text-blue-700 gap-1" title="Interações (Respostas)">
+                     <MessageSquare className="w-3 h-3" /> 
+                     {replied}
+                 </Badge>
+                 <Badge variant="outline" className="px-2 py-0.5 h-6 text-xs font-medium border-red-200 bg-red-50 text-red-700 gap-1" title="Bloqueios">
+                     <ShieldAlert className="w-3 h-3" /> 
+                     {blocked}
+                 </Badge>
             </div>
         </div>
     );
@@ -221,11 +191,41 @@ export const columns: ColumnDef<Campaign>[] = [
       accessorKey: "name",
       header: "Campanha",
       cell: ({ row }) => {
-          const recipients = row.original.recipients || 0;
+          const recipients = row.original.stats?.total || row.original.recipients || 0;
+          
+          // Determine Type based on message content
+          const msgs = row.original.messageTemplate || [];
+          let typeLabel = 'Texto';
+          let TypeIcon = MessageSquare;
+
+          if (msgs.length > 0) {
+              const types = msgs.map((m: any) => m.type);
+              
+              // Priority: Video > Image > Audio > Document > Text
+              if (types.includes('video')) {
+                  typeLabel = 'Vídeo';
+                  TypeIcon = Video;
+              } else if (types.includes('image')) {
+                  typeLabel = 'Imagem';
+                  TypeIcon = ImageIcon;
+              } else if (types.includes('audio')) {
+                  typeLabel = 'Áudio';
+                  TypeIcon = Mic;
+              } else if (types.includes('document')) {
+                  typeLabel = 'Documento';
+                  TypeIcon = FileText;
+              }
+          }
+
           return (
             <div className="flex flex-col">
                 <span className="font-semibold text-base">{row.getValue("name")}</span>
-                <span className="text-xs text-muted-foreground">text • {recipients} contatos</span>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                    <TypeIcon className="w-3 h-3" />
+                    <span>{typeLabel}</span>
+                    <span>•</span>
+                    <span>{recipients} contatos</span>
+                </div>
             </div>
           )
       },
@@ -282,52 +282,82 @@ export const columns: ColumnDef<Campaign>[] = [
         cell: ({ row }) => <CampaignProgressCell campaign={row.original} />
     },
     {
-      accessorKey: "startDate",
-      header: "Agendamento",
+      accessorKey: "scheduledAt",
+      header: "Cronograma",
       cell: ({ row }) => {
-        const val = row.getValue("startDate") || row.original.sentDate;
-        if (!val) return "-";
-        
-        let date = new Date(val as string | number | Date);
-        if (date.getFullYear() > 3000) {
-            const ms = date.getTime();
-            date = new Date(ms / 1000);
+        // 1. Created Date
+        const createdAtVal = row.original.createdAt || row.original.sentDate;
+        let createdAt: Date | null = null;
+        if (createdAtVal) {
+             createdAt = new Date(createdAtVal as string | number | Date);
+             if (createdAt.getFullYear() > 3000) createdAt = new Date(createdAt.getTime() / 1000);
         }
 
+        // 2. Scheduled/Start Date
+        // Priority: scheduledAt (Managed) -> startDate (Legacy/Provider)
+        const startVal = row.original.scheduledAt || row.original.startDate;
+        let startDate: Date | null = null;
+        if (startVal) {
+            startDate = new Date(startVal as string | number | Date);
+            if (startDate.getFullYear() > 3000) startDate = new Date(startDate.getTime() / 1000);
+        }
+
+        // 3. End Date (from Batches)
+        let endDate: Date | null = null;
+        if (row.original.batches) {
+            const batchValues = Object.values(row.original.batches).sort((a, b) => 
+                new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+            );
+            if (batchValues.length > 0) {
+                const lastBatch = batchValues[batchValues.length - 1];
+                // Use endTime if available (more accurate), otherwise fallback to scheduledAt
+                endDate = lastBatch.endTime ? new Date(lastBatch.endTime) : new Date(lastBatch.scheduledAt);
+            }
+        }
+
+        const fmt = (d: Date) => d.toLocaleString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
         return (
-            <div className="text-sm">
-                {date.toLocaleString('pt-BR', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                })}
+            <div className="flex flex-col gap-1 min-w-[140px]">
+                {createdAt && (
+                    <div className="text-xs text-muted-foreground">
+                        <span className="font-semibold text-gray-500">Criada:</span> <br/>
+                        {fmt(createdAt)}
+                    </div>
+                )}
+                
+                {startDate && (
+                    <div className="text-xs">
+                        <span className="font-semibold text-blue-600">Início:</span> <br/>
+                        {fmt(startDate)}
+                    </div>
+                )}
+
+                {endDate && endDate.getTime() !== startDate?.getTime() && (
+                     <div className="text-xs text-muted-foreorongen6"> Previsto
+                        <span className="font-semibold text-gray-500">Fim:</span> <br/>
+                        {fmt(endDate)}
+                    </div>
+                )}
             </div>
         );
       },
     },
+    /*
     {
-        accessorKey: "sentDate",
+        accessorKey: "createdAt",
         header: "Criada em",
         cell: ({ row }) => {
-            // Fallback to sentDate if createdAt is not available
-            const val = row.original.sentDate;
-             if (!val) return "-";
-        
-            let date = new Date(val as string | number | Date);
-            if (date.getFullYear() > 3000) {
-                const ms = date.getTime();
-                date = new Date(ms / 1000);
-            }
-            
-            return (
-                <div className="text-sm text-muted-foreground">
-                    {date.toLocaleDateString('pt-BR')}
-                </div>
-            )
+            // ... (Hidden as per request to merge into Agendamento)
         }
     },
+    */
     {
         id: "actions",
         cell: ({ row }) => <CampaignActionsCell campaign={row.original} />,
@@ -341,7 +371,8 @@ export function CampaignsTable() {
     const campaignsQuery = useMemoFirebase(() => {
         if (!user) return null;
         // Optimization: Limit to 100 most recent campaigns to save reads
-        return query(collection(firestore, 'users', user.uid, 'campaigns'), orderBy('sentDate', 'desc'), limit(100));
+        // Using 'createdAt' instead of 'sentDate' because Managed Campaigns use 'createdAt'
+        return query(collection(firestore, 'users', user.uid, 'campaigns'), orderBy('createdAt', 'desc'), limit(100));
     }, [firestore, user]);
 
     const { data: campaigns, isLoading } = useCollection<Campaign>(campaignsQuery);

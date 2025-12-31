@@ -10,6 +10,7 @@ export type Contact = {
   blockedAt?: string; // ISO String
   lastReplyAt?: string; // ISO String
   lastContactedAt?: string; // ISO String
+  lastMessageAt?: string; // ISO String (Last interaction of any kind)
   notes?: string;
   tags?: string[]; // Array of Tag IDs
 };
@@ -27,6 +28,8 @@ export type Campaign = {
   userId: string;
   name: string;
   sentDate: string;
+  scheduledAt?: string; // New field for Managed Campaigns
+  createdAt?: string;
   startDate?: string;
   endDate?: string;
   status: 'Sent' | 'Scheduled' | 'Draft' | 'Failed' | 'Sending' | 'Completed' | 'Paused';
@@ -44,11 +47,13 @@ export type Campaign = {
   uazapiId?: string;
   trackIds?: string[];
   phones?: string[];
+  messageTemplate?: any[]; // Array of message objects (type: 'text' | 'image' | etc)
   batchIds?: string[];
   batches?: Record<string, {
     id: string;
     name: string;
     scheduledAt: string;
+    endTime?: string; // Add endTime for range display
     status: string;
     count: number;
     stats?: {

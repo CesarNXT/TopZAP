@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui
 import {
   Loader2, Sparkles, AlertTriangle, Users, Star, Cake, ShieldX, ArrowLeft, Send, Zap, Rocket, CalendarClock, Clock, Calendar
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, addDays, differenceInCalendarDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
@@ -43,15 +43,20 @@ import { MessageComposer } from './message-composer';
 import { SpeedSelector } from './speed-selector';
 import { v4 as uuidv4 } from 'uuid';
 import type { Contact, Campaign } from '@/lib/types';
-import { useUser, useFirestore, useCollection } from '@/firebase';
+import { useUser, useFirestore, useCollection, useFirebase } from '@/firebase';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { collection, addDoc, doc, getDoc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, writeBatch, query, where } from 'firebase/firestore';
 import { useMemoFirebase } from '@/firebase/provider';
 
-import { createSimpleCampaignForUser, createAdvancedCampaignForUser, createSimpleCampaignProviderOnly, createAdvancedCampaignProviderOnly } from '@/app/actions/whatsapp-actions';
+import { createSimpleCampaignForUser, createAdvancedCampaignForUser, createSimpleCampaignProviderOnly, createAdvancedCampaignProviderOnly, createManagedCampaign } from '@/app/actions/campaign-actions';
 import { createTag, getTags, batchAssignTagToContacts } from '@/app/actions/tag-actions';
 import { standardizeContactStatuses } from '@/app/actions/migration-actions';
 import { uploadToCatbox } from '@/app/actions/upload-actions';
+import { uploadFileToStorage } from '@/lib/storage-utils';
+import { calculateCampaignSchedule } from '@/lib/campaign-schedule';
+
+import { ScheduleManager } from './schedule-manager';
+import type { ScheduleRule } from '@/lib/campaign-schedule';
 
 const formSchema = z.object({
   name: z.string().min(1, { message: 'O nome da campanha é obrigatório.' }),
@@ -88,7 +93,7 @@ const formSchema = z.object({
     // Allow 2 min tolerance for "just now" processing time
     return start.getTime() > Date.now() - 2 * 60 * 1000;
 }, {
-    message: "O horário de início não pode ser no passado. Ajuste para um horário futuro.",
+    message: "O horário de início não pode ser no passado. Por favor, ajuste para um horário futuro.",
     path: ["startHour"],
 });
 
@@ -119,6 +124,7 @@ export function CreateCampaignWizard() {
     const isSubmittingRef = useRef(false);
     const [tags, setTags] = useState<any[]>([]);
     const [selectedTagId, setSelectedTagId] = useState<string>('');
+    const [scheduleRules, setScheduleRules] = useState<ScheduleRule[]>([]);
 
     useEffect(() => {
         if (user) {
@@ -135,6 +141,20 @@ export function CreateCampaignWizard() {
 
     const { data: contacts, loading: contactsLoading } = useCollection<Contact>(contactsQuery);
     const validContacts = contacts || [];
+
+    // Query active campaigns for overlap check
+    const activeCampaignsQuery = useMemoFirebase(() => {
+        if (!user) return null;
+        return query(
+            collection(firestore, 'users', user.uid, 'campaigns'),
+            where('status', 'in', ['Scheduled', 'Sending'])
+        );
+    }, [firestore, user]);
+
+    const { data: activeCampaigns, loading: checkingSchedule } = useCollection<Campaign>(activeCampaignsQuery);
+    
+    // Get Firebase Storage instance
+    const { storage } = useFirebase();
 
     // Fallback: If contacts array is empty but loading is true, we should wait.
     // If loading is false and contacts is empty, maybe we should try to fetch via batch if we suspect an issue?
@@ -173,8 +193,8 @@ export function CreateCampaignWizard() {
     const startHour = watch('startHour');
     const endHour = watch('endHour');
 
-    // Calculate Estimations
-    const estimation = useMemo(() => {
+    // Calculate props for ScheduleManager
+    const scheduleProps = useMemo(() => {
         if (!contacts || !contactSegment) return null;
         
         let targetContacts: Contact[] = [];
@@ -195,64 +215,25 @@ export function CreateCampaignWizard() {
         if (totalContacts === 0) return null;
 
         // Speed Calculation (Average seconds per message)
-        let avgSecondsPerMsg = 110; // Slow (100-120s)
-        if (sendSpeed === 'medium') avgSecondsPerMsg = 90; // Normal (80-100s)
-        if (sendSpeed === 'fast') avgSecondsPerMsg = 70; // Fast (60-80s)
+        let speedConfig = { minDelay: 170, maxDelay: 190 }; // Slow
+        if (sendSpeed === 'medium') speedConfig = { minDelay: 110, maxDelay: 130 };
+        if (sendSpeed === 'fast') speedConfig = { minDelay: 50, maxDelay: 70 };
 
         // Parse Start/End Hours
-        const parseTime = (time: string) => {
-             const [h, m] = (time || "08:00").split(':').map(Number);
-             return [h || 0, m || 0];
+        let startDateTime = startDate ? new Date(startDate + 'T00:00:00') : new Date();
+        const [h, m] = (startHour || "08:00").split(':').map(Number);
+        startDateTime.setHours(h || 8, m || 0, 0, 0);
+
+        return {
+            totalContacts,
+            speedConfig,
+            startDate: startDateTime,
+            defaultWorkingHours: {
+                start: startHour || "08:00",
+                end: endHour || "18:00"
+            }
         };
-        const [startH, startM] = parseTime(startHour);
-        const [endH, endM] = parseTime(endHour);
-
-        // Calculate Daily Window in Seconds
-        // Assuming same day window. If end < start, we treat as invalid or 0 for now (should validate in schema ideally)
-        let dailySeconds = (endH * 3600 + endM * 60) - (startH * 3600 + startM * 60);
-        if (dailySeconds <= 0) dailySeconds = 8 * 3600; // Fallback to 8 hours if invalid
-
-        // Calculate Messages Per Day
-        const msgsPerDay = Math.max(1, Math.floor(dailySeconds / avgSecondsPerMsg));
-
-        const totalDays = Math.ceil(totalContacts / msgsPerDay);
-        
-        const batches = [];
-        // Base date calculation
-        let currentBatchDate = startDate ? new Date(startDate + 'T00:00:00') : new Date();
-        
-        // Adjust currentBatchDate to the correct start time for the first day
-        currentBatchDate.setHours(startH, startM, 0, 0);
-        
-        for (let i = 0; i < totalDays; i++) {
-            const batchSize = Math.min(msgsPerDay, totalContacts - (i * msgsPerDay));
-            const durationSeconds = batchSize * avgSecondsPerMsg;
-            
-            // Determine start time for this batch
-            let batchStart = new Date(currentBatchDate);
-            // Always set to startHour because we increment days
-            batchStart.setHours(startH, startM, 0, 0);
-
-            const batchEnd = new Date(batchStart.getTime() + (durationSeconds * 1000));
-            
-            const endsNextDay = batchEnd.getDate() !== batchStart.getDate();
-
-            batches.push({
-                day: i + 1,
-                date: batchStart,
-                count: batchSize,
-                endTime: batchEnd,
-                duration: durationSeconds,
-                isLate: false, // Window is enforced by math
-                endsNextDay
-            });
-            
-            // Move base date to next day for the loop
-            currentBatchDate.setDate(currentBatchDate.getDate() + 1);
-        }
-
-        return batches;
-    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, endHour]);
+    }, [contacts, contactSegment, validContacts, sendSpeed, startDate, startHour, endHour, selectedTagIdForm, selectedContactId]);
 
 
     const next = async () => {
@@ -293,6 +274,78 @@ export function CreateCampaignWizard() {
             isSubmittingRef.current = false;
             setIsSubmitting(false);
             return;
+        }
+
+        if (checkingSchedule) {
+             toast({ title: "Verificando agenda...", description: "Aguarde enquanto verificamos a disponibilidade de horário." });
+             isSubmittingRef.current = false;
+             setIsSubmitting(false);
+             return;
+        }
+
+        try {
+        // --- FRONTEND OVERLAP VALIDATION ---
+        if (scheduleProps && activeCampaigns && activeCampaigns.length > 0) {
+            
+            // ADJUST FOR START NOW
+            let effectiveStartDate = scheduleProps.startDate;
+            const effectiveRules = scheduleRules ? [...scheduleRules] : [];
+
+            // 1. Calculate NEW campaign range
+            const simulatedBatches = calculateCampaignSchedule(
+                scheduleProps.totalContacts,
+                scheduleProps.speedConfig,
+                effectiveStartDate,
+                scheduleProps.defaultWorkingHours,
+                effectiveRules
+            );
+
+            if (simulatedBatches.length > 0) {
+                const newStart = simulatedBatches[0].startTime.getTime();
+                const newEnd = simulatedBatches[simulatedBatches.length - 1].endTime.getTime();
+
+                // 2. Check against Active Campaigns
+                for (const campaign of activeCampaigns) {
+                    const existingStart = campaign.scheduledAt ? new Date(campaign.scheduledAt).getTime() : 0;
+                    let existingEnd = existingStart;
+
+                    if (campaign.batches) {
+                        const batchKeys = Object.keys(campaign.batches);
+                        if (batchKeys.length > 0) {
+                            for (const key of batchKeys) {
+                                const b = campaign.batches[key];
+                                if (b.endTime) {
+                                    const t = new Date(b.endTime).getTime();
+                                    if (t > existingEnd) existingEnd = t;
+                                }
+                            }
+                        } else {
+                            existingEnd = existingStart + (1000 * 60 * 60); // 1h fallback
+                        }
+                    } else {
+                        // Fallback for legacy campaigns
+                        existingEnd = existingStart + (1000 * 60 * 60); 
+                    }
+
+                    // Check Overlap
+                    // (StartA < EndB) and (EndA > StartB)
+                    if (newStart < existingEnd && newEnd > existingStart) {
+                        const existingName = campaign.name || 'Sem nome';
+                        const startStr = new Date(existingStart).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                        const endStr = new Date(existingEnd).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                        
+                        toast({
+                            variant: "destructive",
+                            title: "Conflito de Horário",
+                            description: `A campanha "${existingName}" já está agendada de ${startStr} até ${endStr}. O sistema não permite campanhas simultâneas para garantir a segurança da conta.`
+                        });
+                        
+                        isSubmittingRef.current = false;
+                        setIsSubmitting(false);
+                        return;
+                    }
+                }
+            }
         }
 
         // Filter out empty buttons (User Request: "Se o botão ficar vazio não envie")
@@ -336,22 +389,40 @@ export function CreateCampaignWizard() {
         const messagesToSend: any[] = [];
         if (values.media) {
             try {
-                // Upload to Catbox
-                const formData = new FormData();
-                formData.append('reqtype', 'fileupload');
-                formData.append('fileToUpload', values.media);
+                let mediaUrl = '';
                 
-                const uploadResult = await uploadToCatbox(formData);
-                if (uploadResult.error) {
-                    throw new Error(uploadResult.error);
+                // Strategy: Prioritize Firebase Storage (Client Side) for reliability
+                // Fallback to Catbox (Server Action) only if Storage is unavailable or fails
+                
+                let uploadSuccess = false;
+
+                // 1. Upload directly to Catbox (Server Action) to generate public Link
+                try {
+                    console.log("Starting upload to Catbox...");
+                    const formData = new FormData();
+                    formData.append('reqtype', 'fileupload');
+                    formData.append('fileToUpload', values.media);
+                    
+                    const uploadResult = await uploadToCatbox(formData);
+                    
+                    if (uploadResult && typeof uploadResult === 'object' && 'url' in uploadResult && uploadResult.url) {
+                        mediaUrl = uploadResult.url as string;
+                        uploadSuccess = true;
+                    } else {
+                         const err = (uploadResult && typeof uploadResult === 'object' && 'error' in uploadResult) ? (uploadResult as any).error : "Falha no servidor de upload.";
+                         throw new Error(err);
+                    }
+                } catch (catboxError: any) {
+                    console.error("Catbox upload failed:", catboxError);
+                    throw new Error("Falha no upload do arquivo. O serviço de upload (Catbox) falhou.");
                 }
-                
-                const mediaUrl = uploadResult.url;
-                
+
+                if (!mediaUrl) throw new Error("Falha ao obter URL da mídia.");
+
                 if (values.media.type.startsWith('image/')) {
                     // Split into Image + Text/Buttons to ensure compatibility (Safety First)
                     messagesToSend.push({
-                        image: mediaUrl, 
+                        file: mediaUrl, // Fixed: UAZAPI expects 'file', not 'image'
                         caption: "", 
                         type: 'image'
                     });
@@ -409,8 +480,20 @@ export function CreateCampaignWizard() {
                 }
             } catch (e: any) {
                 console.error("File upload error", e);
-                toast({ variant: "destructive", title: "Erro no Upload", description: e.message || "Falha ao processar arquivo de mídia." });
-                isSubmittingRef.current = false;
+                
+                // Safe error message extraction
+                let errorMessage = "Falha ao processar arquivo de mídia.";
+                if (e) {
+                    if (typeof e === 'string') errorMessage = e;
+                    else if (e.message) errorMessage = e.message;
+                    else if (e.error) errorMessage = e.error; 
+                }
+
+                toast({
+                    variant: "destructive",
+                    title: "Erro no Upload",
+                    description: errorMessage
+                });
                 setIsSubmitting(false);
                 return;
             }
@@ -476,227 +559,82 @@ export function CreateCampaignWizard() {
                  console.log(`Assigned tag '${campaignTagName}' to ${contactIds.length} contacts.`);
             }
         } catch (err) {
-            console.error("Error in auto-tagging:", err);
-            // Don't block campaign creation if tagging fails, just log it.
+            console.error("Error auto-tagging contacts:", err);
+            // Continue even if tagging fails
         }
 
-        // Call Server Action to Send
-        // Batching Logic for Daily Limits
-        const totalContacts = phones.length;
+        // --- NEW MANAGED CAMPAIGN LOGIC ---
         
-        // Speed Calculation (Average seconds per message)
-        let avgSecondsPerMsg = 110; // Slow (100-120s)
-        if (sendSpeed === 'medium') avgSecondsPerMsg = 90; // Normal (80-100s)
-        if (sendSpeed === 'fast') avgSecondsPerMsg = 70; // Fast (60-80s)
-
-        // Parse Start/End Hours
-        const parseTime = (time: string) => {
-             const [h, m] = (time || "08:00").split(':').map(Number);
-             return [h || 0, m || 0];
+        // Determine Speed Config
+        let speedConfig = {
+            mode: 'slow' as 'slow' | 'normal' | 'fast',
+            minDelay: 170,
+            maxDelay: 190
         };
-        const [startH, startM] = parseTime(values.startHour);
-        const [endH, endM] = parseTime(values.endHour);
 
-        // Calculate Daily Window in Seconds
-        let dailySeconds = (endH * 3600 + endM * 60) - (startH * 3600 + startM * 60);
-        if (dailySeconds <= 0) dailySeconds = 8 * 3600; // Fallback
-
-        // Calculate Messages Per Day
-        const msgsPerDay = Math.max(1, Math.floor(dailySeconds / avgSecondsPerMsg));
-        
-        const batches = [];
-        for (let i = 0; i < totalContacts; i += msgsPerDay) {
-            batches.push(phones.slice(i, i + msgsPerDay));
+        if (values.sendSpeed === 'fast') {
+            speedConfig = { mode: 'fast', minDelay: 50, maxDelay: 70 };
+        } else if (values.sendSpeed === 'medium') { // 'medium' in form maps to 'normal' logic
+            speedConfig = { mode: 'normal', minDelay: 110, maxDelay: 130 };
+        } else {
+            // Slow
+            speedConfig = { mode: 'slow', minDelay: 170, maxDelay: 190 };
         }
 
-        // Base date calculation
-        let currentBatchDate = values.startDate ? new Date(values.startDate + 'T00:00:00') : new Date();
-        
-        // Adjust first day time
-        currentBatchDate.setHours(startH, startM, 0, 0);
+        // Prepare Recipients
+        const recipients = targetContacts.map(c => ({
+            name: c.name || '',
+            phone: c.phone || '',
+            // Add other fields if needed for personalization
+        }));
 
-        // Validation: Ensure start time is not in the past
-        if (currentBatchDate.getTime() < Date.now() - 5 * 60 * 1000) { // 5 min tolerance
-            toast({ variant: "destructive", title: "Horário Inválido", description: "O horário de início não pode ser no passado. Por favor, ajuste o horário." });
-            isSubmittingRef.current = false;
-            setIsSubmitting(false);
-            return;
+        // Determine Schedule Time
+        let scheduledAt = new Date().toISOString();
+        if (values.startDate && values.startHour) {
+             // Force Brasilia Time Zone (-03:00) as per user requirement "horario de brasilia"
+             const startDateTime = new Date(`${values.startDate}T${values.startHour}:00-03:00`);
+             if (!isNaN(startDateTime.getTime())) {
+                 scheduledAt = startDateTime.toISOString();
+             }
         }
 
-        let successCount = 0;
-        let lastDocRef: any = null;
-        
-        const batchIds: string[] = [];
-        const batchesMap: Record<string, any> = {};
+        const result = await createManagedCampaign({
+            userId: user.uid,
+            name: values.name,
+            messageTemplate: messagesToSend,
+            recipients,
+            speedConfig,
+            scheduledAt,
+            startNow: false,
+            workingHours: {
+                start: values.startHour || "08:00",
+                end: values.endHour || "18:00"
+            },
+            scheduleRules: scheduleRules
+        });
 
-        for (let i = 0; i < batches.length; i++) {
-            const batchPhones = batches[i];
-            const batchIndex = i + 1;
-            const isMultiBatch = batches.length > 1;
-            
-             // Set time for current batch
-            let batchDate = new Date(currentBatchDate);
-            // Always set to startHour because we increment days
-            batchDate.setHours(startH, startM, 0, 0);
-            
-            // Calculate scheduled timestamp (milliseconds)
-            const scheduledFor = batchDate.getTime();
-            
-            const batchName = isMultiBatch ? `${values.name} (Dia ${batchIndex})` : values.name;
+        console.log("Managed Campaign Creation Result:", result);
 
-            let sendResult;
-
-            // Use Simple Campaign endpoint if we have a single message AND no buttons (User preference/Reliability)
-            const hasButtons = values.buttons && values.buttons.length > 0;
-            const isSimpleMessage = messagesToSend.length === 1 && !hasButtons && typeof messagesToSend[0] === 'string';
-
-            if (isSimpleMessage) {
-                console.log(`[Wizard] Using Simple Campaign for '${batchName}'`);
-                sendResult = await createSimpleCampaignProviderOnly(
-                    user.uid,
-                    batchName,
-                    messagesToSend[0],
-                    batchPhones,
-                    scheduledFor,
-                    values.sendSpeed as any
-                );
-            } else {
-                console.log(`[Wizard] Using Advanced Campaign for '${batchName}' (Messages: ${messagesToSend.length})`);
-                sendResult = await createAdvancedCampaignProviderOnly(
-                    user.uid,
-                    batchName,
-                    messagesToSend,
-                    batchPhones,
-                    scheduledFor,
-                    values.sendSpeed as any
-                );
-            }
-
-            if (sendResult.error) {
-                 toast({ variant: "destructive", title: `Erro no Lote ${batchIndex}`, description: sendResult.error });
-                 continue; // Continue with next batch? Or stop? Let's continue.
-            }
-
-            const uazapiId = sendResult.id || sendResult.folderId || sendResult.campaignId || sendResult.folder_id;
-            
-            if (uazapiId) {
-                const idStr = String(uazapiId);
-                batchIds.push(idStr);
-                batchesMap[idStr] = {
-                    id: idStr,
-                    name: batchName,
-                    trackId: sendResult.trackId, // Store the generated trackId
-                    scheduledAt: new Date(scheduledFor).toISOString(),
-                    status: 'Scheduled',
-                    count: batchPhones.length,
-                    phones: batchPhones, // Save phones for retry/control
-                    stats: { sent: 0, delivered: 0, read: 0, failed: 0 }
-                };
-                successCount++;
-            }
-
-            // Prepare date for next batch
-            currentBatchDate.setDate(currentBatchDate.getDate() + 1);
-        }
-        
-        if (successCount > 0) {
-            try {
-                const campaignCollection = collection(firestore, 'users', user.uid, 'campaigns');
-                
-                // Determine Start Date (First Batch)
-                const firstBatchId = batchIds[0];
-                const startDate = batchesMap[firstBatchId]?.scheduledAt || new Date().toISOString();
-
-                // Extract trackIds for efficient querying
-                const trackIds = Object.values(batchesMap)
-                    .map((b: any) => b.trackId)
-                    .filter(Boolean);
-
-                const newCampaign: Omit<Campaign, 'id'> = {
-                    name: values.name,
-                    status: 'Scheduled',
-                    sentDate: new Date().toISOString(), // Created At
-                    startDate: startDate,
-                    recipients: phones.length, // Total recipients
-                    engagement: 0,
-                    userId: user.uid,
-                    batchIds: batchIds,
-                    batches: batchesMap,
-                    trackIds: trackIds, // Added for webhook lookup
-                    messages: messagesToSend, // Save messages for retry/control
-                    phones: phones, // Save all phones for reference
-                    stats: { sent: 0, delivered: 0, read: 0, replied: 0, blocked: 0, failed: 0 }
-                };
-
-                lastDocRef = await addDoc(campaignCollection, newCampaign);
-
-                // Create 'dispatches' subcollection for detailed tracking
-                // This ensures we have a local record of every targeted contact
-                try {
-                    const campaignId = lastDocRef.id;
-                    const batchSize = 500;
-                    const chunks = [];
-                    
-                    // Flatten batches to get all scheduled items with their specific batch info
-                    const allDispatches = [];
-                    Object.values(batchesMap).forEach((batch: any) => {
-                        batch.phones.forEach((phone: string) => {
-                            allDispatches.push({
-                                phone,
-                                batchId: batch.id,
-                                status: 'scheduled', // Initial status
-                                scheduledAt: batch.scheduledAt,
-                                message: messagesToSend.length > 0 ? (typeof messagesToSend[0] === 'string' ? messagesToSend[0] : 'Media/Template') : '',
-                                updatedAt: new Date().toISOString()
-                            });
-                        });
-                    });
-
-                    for (let i = 0; i < allDispatches.length; i += batchSize) {
-                        chunks.push(allDispatches.slice(i, i + batchSize));
-                    }
-
-                    console.log(`[Wizard] Creating ${allDispatches.length} dispatch records in ${chunks.length} batches...`);
-
-                    for (const chunk of chunks) {
-                        const batch = writeBatch(firestore);
-                        chunk.forEach((dispatch) => {
-                            // Use phone as ID for easy lookup, or auto-id if duplicates allowed (but phone as ID prevents dupes per campaign)
-                            const dispatchRef = doc(collection(firestore, 'users', user.uid, 'campaigns', campaignId, 'dispatches')); 
-                            batch.set(dispatchRef, dispatch);
-                        });
-                        await batch.commit();
-                    }
-                    console.log(`[Wizard] All dispatch records created.`);
-
-                } catch (err) {
-                    console.error("Error creating dispatch records:", err);
-                    // Don't fail the whole process, but warn
-                    toast({ variant: "default", title: "Aviso", description: "Campanha criada, mas houve erro ao detalhar lista de envio." });
-                }
-
-            } catch (e) {
-                console.error("Error creating campaign doc", e);
-                toast({ variant: "destructive", title: `Erro ao salvar campanha`, description: "A campanha foi enviada mas houve erro ao salvar no histórico." });
-            }
-
-            // Legacy 'New' to 'Active' update block removed as per request to remove legacy statuses.
-            // Only 'Active' contacts are targeted now.
-
-            toast({
-                title: "Campanha Agendada!",
-                description: `${successCount} lote(s) agendado(s) com sucesso.`
-            });
-            
-            if (lastDocRef) {
-                sessionStorage.setItem('newlyCreatedCampaignId', lastDocRef.id);
-            }
+        if (result.success) {
+            toast({ title: "Campanha Criada!", description: `Campanha agendada com sucesso. ID: ${result.campaignId}` });
             router.push('/campaigns');
         } else {
-            toast({ variant: "destructive", title: "Erro", description: "Falha ao criar campanha." });
+            console.error("Campaign Creation Failed:", result.error);
+            toast({ variant: "destructive", title: "Erro", description: result.error || "Erro ao criar campanha." });
             isSubmittingRef.current = false;
             setIsSubmitting(false);
         }
+
+    } catch (globalError: any) {
+        console.error("Critical error in processSubmit:", globalError);
+        toast({ 
+            variant: "destructive", 
+            title: "Erro Crítico", 
+            description: globalError.message || "Ocorreu um erro inesperado ao criar a campanha." 
+        });
+        isSubmittingRef.current = false;
+        setIsSubmitting(false);
+    }
     }
 
     const handleFinalSubmit = () => {
@@ -917,65 +855,13 @@ export function CreateCampaignWizard() {
                 <div className={cn(currentStep !== 2 && "hidden")}>
                     <SpeedSelector form={form} />
                         
-                        {estimation && estimation.length > 0 && (
-                            <Card className="mt-6 border-blue-100 bg-blue-50/50">
-                                <CardHeader className="pb-3">
-                                    <CardTitle className="text-base flex items-center gap-2">
-                                        <CalendarClock className="h-5 w-5 text-blue-600" />
-                                        Cronograma Estimado de Envio
-                                    </CardTitle>
-                                    <CardDescription>
-                                        Previsão baseada na velocidade média e janela de envio diária.
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="space-y-3">
-                                        {estimation.map((batch) => (
-                                            <div key={batch.day} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-3 rounded-md border border-blue-100 text-sm">
-                                                <div className="flex items-center gap-3 mb-2 sm:mb-0">
-                                                    <div className="bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded text-xs w-16 text-center">
-                                                        Lote {batch.day}
-                                                    </div>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-medium text-gray-700">
-                                                            {format(batch.date, "dd/MM/yyyy", { locale: ptBR })}
-                                                        </span>
-                                                        <span className="text-gray-500 text-xs">
-                                                            {batch.count} contatos
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                                
-                                                <div className="flex items-center gap-4 text-gray-600">
-                                                    <div className="flex items-center gap-1" title="Início Estimado">
-                                                        <Clock className="h-3 w-3" />
-                                                        <span>{format(batch.date, "HH:mm")}</span>
-                                                    </div>
-                                                    <span className="text-gray-300">→</span>
-                                                    <div className={`flex items-center gap-1 ${batch.isLate || batch.endsNextDay ? "text-amber-600 font-medium" : ""}`} title="Término Estimado">
-                                                        <span>{format(batch.endTime, "HH:mm")}</span>
-                                                        {batch.endsNextDay && <span className="text-[10px] bg-amber-100 px-1 rounded ml-1">+1 dia</span>}
-                                                    </div>
-                                                </div>
-
-                                                {(batch.isLate || batch.endsNextDay) && (
-                                                    <div className="w-full sm:w-auto mt-2 sm:mt-0 sm:ml-4 text-amber-600 flex items-center gap-1 text-xs">
-                                                        <AlertTriangle className="h-3 w-3" />
-                                                        <span className="sm:hidden">Atenção: Termina tarde</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                        
-                                        <div className="mt-4 flex gap-2 text-xs text-gray-500 bg-white/50 p-2 rounded">
-                                            <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                                            <p>
-                                                Importante: O horário de término é uma estimativa. Se o envio ultrapassar o horário comercial ou entrar na madrugada, recomendamos ajustar o horário de início ou reduzir a velocidade para evitar bloqueios.
-                                            </p>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
+                        {scheduleProps && (
+                            <div className="mt-6 space-y-6">
+                                <ScheduleManager 
+                                    {...scheduleProps}
+                                    onRulesChange={setScheduleRules} 
+                                />
+                            </div>
                         )}
                 </div>
                 
@@ -1050,11 +936,11 @@ export function CreateCampaignWizard() {
                             {isSubmitting ? (
                                 <>
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Enviando...
+                                    Agendando...
                                 </>
                             ) : (
                                 <>
-                                    <Send className="mr-2 h-4 w-4" /> Iniciar Disparo Agora
+                                    <CalendarClock className="mr-2 h-4 w-4" /> Agendar Campanha
                                 </>
                             )}
                         </Button>

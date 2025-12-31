@@ -27,11 +27,17 @@ if (admin.apps.length) {
   db = admin.firestore();
   auth = admin.auth();
 } else {
-  // Mock or throw error if accessed? 
-  // Better to allow the module to load but fail on usage if not init.
-  // We'll cast to any to avoid TS errors during initialization if skipped.
-  db = {} as any;
-  auth = {} as any;
+  // Create a Proxy that throws an error when any property is accessed
+  const createThrowingProxy = (name: string) => new Proxy({}, {
+    get: (_target, prop) => {
+        // Allow strictly necessary checks like 'then' (for promises) to return undefined if needed, 
+        // but mostly we want to fail hard.
+        throw new Error(`Firebase Admin (${name}) not initialized. Check server logs for missing credentials.`);
+    }
+  });
+
+  db = createThrowingProxy('Firestore') as any;
+  auth = createThrowingProxy('Auth') as any;
 }
 
 export { admin, db, auth };

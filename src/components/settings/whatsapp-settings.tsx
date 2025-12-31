@@ -111,7 +111,10 @@ export function WhatsAppSettings() {
 
             // 3. Save to Firestore if valid and connected
             // Ensure no undefined values are passed to Firestore
+            // Include id and email to satisfy 'isCreatingSelf' rule if document is being created
             await setDoc(doc(firestore, 'users', user.uid), {
+                id: user.uid,
+                email: user.email,
                 uazapi: {
                     token: token.trim(),
                     connected: true,

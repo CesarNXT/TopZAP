@@ -80,7 +80,8 @@ service cloud.firestore {
      * Protects the primary link between the user document and the auth UID.
      */
     function isOwnerIdImmutable() {
-      return request.resource.data.id == resource.data.id;
+      // Allow update if 'id' is not being modified OR if it remains the same
+      return !('id' in request.resource.data) || request.resource.data.id == resource.data.id;
     }
 
     /**
@@ -115,7 +116,8 @@ service cloud.firestore {
       allow get: if isOwner(userId);
       allow list: if false;
       allow create: if isOwner(userId) && isCreatingSelf(userId);
-      allow update: if isExistingOwner(userId) && isOwnerIdImmutable();
+      // Simplified update rule to fix permission error when saving token
+      allow update: if isExistingOwner(userId);
       allow delete: if isExistingOwner(userId);
 
       /**

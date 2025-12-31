@@ -28,7 +28,7 @@ import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '../ui/dropdown-menu';
-import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2, UserPlus, User, Search, Tag as TagIcon } from 'lucide-react';
+import { MoreHorizontal, Star, Ban, Users, Crown, FilterX, Loader2, Trash2, UserPlus, User, Search, Tag as TagIcon, RefreshCw } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
@@ -225,6 +225,17 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         cell: ({ row }) => formatPhoneNumber(row.getValue('phone'))
       },
       {
+        accessorKey: "lastMessageAt",
+        header: "Última Interação",
+        cell: ({ row }) => {
+            const date = row.getValue('lastMessageAt') as string;
+            if (!date) return <span className="text-muted-foreground text-xs">-</span>;
+            const d = new Date(date);
+            if (isNaN(d.getTime())) return <span className="text-muted-foreground text-xs">-</span>;
+            return <span className="text-xs text-muted-foreground">{d.toLocaleString()}</span>;
+        }
+      },
+      {
         accessorKey: "segment",
         header: "Status",
         cell: ({ row }) => {
@@ -329,8 +340,13 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
   });
 
   const loadContacts = React.useCallback(async () => {
-      if (!userId) return;
+      if (!userId) {
+          console.log('[Frontend] No userId found, skipping loadContacts.');
+          return;
+      }
       
+      console.log(`[Frontend] Loading contacts for UserID: ${userId}`);
+
       // Check cache first
       if (pagesCache[page]) {
           setContacts(pagesCache[page]);
@@ -463,7 +479,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
       
       // Standard ordering
       if (filter === 'all') {
-          queries.push(orderBy('name'));
+          queries.push(orderBy('name', 'asc'));
       }
       
       // Pagination logic
@@ -684,7 +700,18 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                   colSpan={columns.length}
                   className="h-24 text-center"
                 >
-                  Nenhum contato encontrado.
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <span>Nenhum contato encontrado.</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => loadContacts()}
+                      className="mt-2"
+                    >
+                      <RefreshCw className="h-3 w-3 mr-2" />
+                      Tentar Recarregar
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             )}

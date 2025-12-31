@@ -49,7 +49,7 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                     >
                       <span className="text-4xl mb-2">🐢</span>
                       <span className="font-bold">Modo Lento</span>
-                      <span className="text-xs text-muted-foreground mt-1 text-center">100-120s / msg</span>
+                      <span className="text-xs text-muted-foreground mt-1 text-center">170-190s / msg (~3 min)</span>
                       <span className="text-xs font-semibold text-primary mt-1">Recomendado</span>
                     </label>
                   </FormItem>
@@ -61,7 +61,7 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                     >
                       <span className="text-4xl mb-2">🐇</span>
                       <span className="font-bold">Modo Normal</span>
-                      <span className="text-xs text-muted-foreground mt-1 text-center">80-100s / msg</span>
+                      <span className="text-xs text-muted-foreground mt-1 text-center">110-130s / msg (~2 min)</span>
                       <span className="text-xs font-semibold text-yellow-600 mt-1">Risco Médio</span>
                     </label>
                   </FormItem>
@@ -73,7 +73,7 @@ export function SpeedSelector({ form }: SpeedSelectorProps) {
                     >
                       <span className="text-4xl mb-2">🚀</span>
                       <span className="font-bold">Modo Rápido</span>
-                      <span className="text-xs text-muted-foreground mt-1 text-center">60-80s / msg</span>
+                      <span className="text-xs text-muted-foreground mt-1 text-center">50-70s / msg (~1 min)</span>
                       <span className="text-xs font-semibold text-destructive mt-1">Alto Risco</span>
                     </label>
                   </FormItem>

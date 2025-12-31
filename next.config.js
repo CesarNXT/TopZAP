@@ -7,6 +7,11 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '200mb',
+    },
+  },
   images: {
     remotePatterns: [
       {
@@ -50,7 +55,7 @@ const nextConfig = {
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '10mb',
+      bodySizeLimit: '200mb',
       allowedOrigins: ['localhost:3000', '*.ngrok-free.app'],
     },
     serverComponentsExternalPackages: [

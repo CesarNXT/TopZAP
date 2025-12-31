@@ -34,8 +34,18 @@ export async function standardizeContactStatuses(userId: string) {
         }
 
         // Only update if change is needed
+        const updates: any = {};
         if (newSegment && newSegment !== currentSegment) {
-            batch.update(doc.ref, { segment: newSegment });
+            updates.segment = newSegment;
+        }
+
+        // Backfill lastMessageAt if missing (ensure sortability)
+        if (!data.lastMessageAt) {
+            updates.lastMessageAt = data.createdAt || new Date(0).toISOString();
+        }
+
+        if (Object.keys(updates).length > 0) {
+            batch.update(doc.ref, updates);
             operationCount++;
             updatedCount++;
         }

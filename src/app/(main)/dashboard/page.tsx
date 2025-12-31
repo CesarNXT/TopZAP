@@ -77,8 +77,8 @@ export default function DashboardPage() {
 
         return query(
             collection(firestore, 'users', user.uid, 'campaigns'), 
-            where('sentDate', '>=', isoDate),
-            orderBy('sentDate', 'desc'),
+            where('createdAt', '>=', isoDate),
+            orderBy('createdAt', 'desc'),
             limit(100) // Safety cap
         );
     }, [firestore, user]);

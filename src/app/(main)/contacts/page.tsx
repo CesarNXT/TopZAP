@@ -4,7 +4,7 @@ import { PageHeader, PageHeaderHeading, PageHeaderDescription, PageHeaderActions
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { PlusCircle, Upload, Trash2, Tag, Users, UserCheck, Ban } from 'lucide-react';
+import { PlusCircle, Upload, Trash2, Tag, Users, UserCheck, Ban, RefreshCw } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { CsvImportWizard } from '@/components/contacts/csv-import-wizard';
 import { useToast } from '@/hooks/use-toast';
@@ -310,6 +310,11 @@ export default function ContactsPage() {
     setImportCounter(c => c + 1);
   }
 
+  const handleRefresh = () => {
+    setImportCounter(c => c + 1);
+    toast({ title: "Atualizando...", description: "A lista de contatos está sendo atualizada." });
+  };
+
   return (
     <div className="container">
       <PageHeader>
@@ -320,6 +325,9 @@ export default function ContactsPage() {
           </PageHeaderDescription>
         </div>
         <PageHeaderActions>
+            <Button variant="outline" size="icon" onClick={handleRefresh} title="Atualizar Lista">
+                <RefreshCw className="h-4 w-4" />
+            </Button>
             <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Excluir Todos

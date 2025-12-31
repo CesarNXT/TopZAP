@@ -1,3 +1,84 @@
+/instance/status
+Verificar status da instância
+Retorna o status atual de uma instância, incluindo:
+
+Estado da conexão (disconnected, connecting, connected)
+QR code atualizado (se em processo de conexão)
+Código de pareamento (se disponível)
+Informações da última desconexão
+Detalhes completos da instância
+Este endpoint é particularmente útil para:
+
+Monitorar o progresso da conexão
+Obter QR codes atualizados durante o processo de conexão
+Verificar o estado atual da instância
+Identificar problemas de conexão
+Estados possíveis:
+
+disconnected: Desconectado do WhatsApp
+connecting: Em processo de conexão (aguardando QR code ou código de pareamento)
+connected: Conectado e autenticado com sucesso
+Responses
+
+200
+Sucesso
+Response Example
+
+{
+  "instance": {
+    "id": "i91011ijkl",
+    "token": "abc123xyz",
+    "status": "connected",
+    "paircode": "1234-5678",
+    "qrcode": "data:image/png;base64,iVBORw0KGg...",
+    "name": "Instância Principal",
+    "profileName": "Loja ABC",
+    "profilePicUrl": "https://example.com/profile.jpg",
+    "isBusiness": true,
+    "plataform": "Android",
+    "systemName": "uazapi",
+    "owner": "user@example.com",
+    "lastDisconnect": "2025-01-24T14:00:00Z",
+    "lastDisconnectReason": "Network error",
+    "adminField01": "custom_data",
+    "openai_apikey": "sk-...xyz",
+    "chatbot_enabled": true,
+    "chatbot_ignoreGroups": true,
+    "chatbot_stopConversation": "parar",
+    "chatbot_stopMinutes": 60,
+    "created": "2025-01-24T14:00:00Z",
+    "updated": "2025-01-24T14:30:00Z",
+    "currentPresence": "available"
+  },
+  "status": {
+    "connected": false,
+    "loggedIn": false,
+    "jid": null
+  }
+}
+
+401
+Token inválido/expirado
+Response Example
+
+{
+  "error": "instance info not found"
+}
+
+404
+Instância não encontrada
+No response body for this status code.
+
+500
+Erro interno
+No response body for this status code.
+
+curl --request GET \
+  --url https://atendimento.uazapi.com/instance/status \
+  --header 'Accept: application/json' \
+  --header 'token: 640c7a9c-b878-414e-ac6f-1a4877153968'
+
+  /webhook
 Configurar Webhook da Instância
 Gerencia a configuração de webhooks para receber eventos em tempo real da instância. Permite gerenciar múltiplos webhooks por instância através do campo ID e action.
 
@@ -172,25 +253,24 @@ Response Example
   "error": "Could not save webhook"
 }
 
-
 curl --request POST \
   --url https://atendimento.uazapi.com/webhook \
   --header 'Accept: application/json' \
   --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
+  --header 'token: 640c7a9c-b878-414e-ac6f-1a4877153968' \
   --data '{
   "enabled": true,
   "url": "https://webhook.cool/example",
    "events": [
     "messages",
-    "sender"
+    "sender",
+    "connection"
   ],
   "excludeMessages": [
     "wasSentByApi",
     "isGroupYes"
   ]
 }'
-
 
 
 /send/text
@@ -413,11 +493,6 @@ Response Example
 
 429
 Limite de requisições excedido
-Response Example
-
-{
-  "error": "Rate limit exceeded"
-}
 
 500
 Erro interno do servidor
@@ -431,13 +506,12 @@ curl --request POST \
   --url https://atendimento.uazapi.com/send/text \
   --header 'Accept: application/json' \
   --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
+  --header 'token: 640c7a9c-b878-414e-ac6f-1a4877153968' \
   --data '{
   "number": "558189779423",
   "text": "Olá! Como posso ajudar?"
 }'
 
-POST
 /send/media
 Enviar mídia (imagem, vídeo, áudio ou documento)
 Envia diferentes tipos de mídia para um contato ou grupo. Suporta URLs ou arquivos base64.
@@ -691,13 +765,12 @@ curl --request POST \
   --url https://atendimento.uazapi.com/send/media \
   --header 'Accept: application/json' \
   --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
+  --header 'token: 640c7a9c-b878-414e-ac6f-1a4877153968' \
   --data '{
   "number": "558189779423",
   "type": "image",
   "file": "https://files.catbox.moe/f71ci7.png"
 }'
-
 
 
 /send/menu
@@ -1080,9 +1153,9 @@ curl --request POST \
   --url https://atendimento.uazapi.com/send/menu \
   --header 'Accept: application/json' \
   --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
+  --header 'token: 640c7a9c-b878-414e-ac6f-1a4877153968' \
   --data '{
-  "number": "5581995207521",
+  "number": "5511999999999",
   "type": "list",
   "text": "Escolha uma opção:",
   "footerText": "Menu de serviços",
@@ -1103,855 +1176,6 @@ curl --request POST \
   "readmessages": true,
   "delay": 1000,
   "track_source": "chatwoot",
-  "track_id": "msg_123456789"
-}'
-
-
-/chat/details
-Obter Detalhes Completos
-Retorna informações completas sobre um contato ou chat, incluindo todos os campos disponíveis do modelo Chat.
-
-Funcionalidades:
-Retorna chat completo: Todos os campos do modelo Chat (mais de 60 campos)
-Busca informações para contatos individuais e grupos
-URLs de imagem em dois tamanhos: preview (menor) ou full (original)
-Combina informações de diferentes fontes: WhatsApp, contatos salvos, leads
-Atualiza automaticamente dados desatualizados no banco
-Campos Retornados:
-Informações básicas: id, wa_fastid, wa_chatid, owner, name, phone
-Dados do WhatsApp: wa_name, wa_contactName, wa_archived, wa_isBlocked, etc.
-Dados de lead/CRM: lead_name, lead_email, lead_status, lead_field01-20, etc.
-Informações de grupo: wa_isGroup, wa_isGroup_admin, wa_isGroup_announce, etc.
-Chatbot: chatbot_summary, chatbot_lastTrigger_id, chatbot_disableUntil, etc.
-Configurações: wa_muteEndTime, wa_isPinned, wa_unreadCount, etc.
-Comportamento:
-
-Para contatos individuais:
-Busca nome verificado do WhatsApp
-Verifica nome salvo nos contatos
-Formata número internacional
-Calcula grupos em comum
-Para grupos:
-Busca nome do grupo
-Verifica status de comunidade
-Request
-Body
-number
-string
-required
-Número do telefone ou ID do grupo
-
-Example: "5511999999999"
-
-preview
-boolean
-Controla o tamanho da imagem de perfil retornada:
-
-true: Retorna imagem em tamanho preview (menor, otimizada para listagens)
-false (padrão): Retorna imagem em tamanho full (resolução original, maior qualidade)
-Responses
-
-200
-Informações completas do chat retornadas com sucesso
-Response Example
-
-{
-  "id": "string",
-  "wa_fastid": "string",
-  "wa_chatid": "string",
-  "wa_chatlid": "string",
-  "wa_archived": false,
-  "wa_contactName": "string",
-  "wa_name": "string",
-  "name": "string",
-  "image": "string",
-  "imagePreview": "string",
-  "wa_ephemeralExpiration": 0,
-  "wa_isBlocked": false,
-  "wa_isGroup": false,
-  "wa_isGroup_admin": false,
-  "wa_isGroup_announce": false,
-  "wa_isGroup_community": false,
-  "wa_isGroup_member": false,
-  "wa_isPinned": false,
-  "wa_label": [
-    "string"
-  ],
-  "wa_lastMessageTextVote": "string",
-  "wa_lastMessageType": "string",
-  "wa_lastMsgTimestamp": 0,
-  "wa_lastMessageSender": "string",
-  "wa_muteEndTime": 0,
-  "owner": "string",
-  "wa_unreadCount": 0,
-  "phone": "string",
-  "common_groups": "Grupo Família(120363123456789012@g.us),Trabalho(987654321098765432@g.us)",
-  "lead_name": "string",
-  "lead_fullName": "string",
-  "lead_email": "string",
-  "lead_personalid": "string",
-  "lead_status": "string",
-  "lead_tags": [
-    "string"
-  ],
-  "lead_notes": "string",
-  "lead_isTicketOpen": false,
-  "lead_assignedAttendant_id": "string",
-  "lead_kanbanOrder": 0,
-  "lead_field01": "string",
-  "lead_field02": "string",
-  "lead_field03": "string",
-  "lead_field04": "string",
-  "lead_field05": "string",
-  "lead_field06": "string",
-  "lead_field07": "string",
-  "lead_field08": "string",
-  "lead_field09": "string",
-  "lead_field10": "string",
-  "lead_field11": "string",
-  "lead_field12": "string",
-  "lead_field13": "string",
-  "lead_field14": "string",
-  "lead_field15": "string",
-  "lead_field16": "string",
-  "lead_field17": "string",
-  "lead_field18": "string",
-  "lead_field19": "string",
-  "lead_field20": "string",
-  "chatbot_agentResetMemoryAt": 0,
-  "chatbot_lastTrigger_id": "string",
-  "chatbot_lastTriggerAt": 0,
-  "chatbot_disableUntil": 0
-}
-
-400
-Payload inválido ou número inválido
-Response Example
-
-{
-  "error": "Invalid request payload"
-}
-
-401
-Token não fornecido
-Response Example
-
-{
-  "error": "Unauthorized"
-}
-
-500
-Erro interno do servidor ou sessão não iniciada
-Response Example
-
-{
-  "error": "No session"
-}
-
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/chat/details \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "number": "5581995207521",
-  "preview": false
-}'
-
-
-
-/sender/simple
-Criar nova campanha (Simples)
-Cria uma nova campanha de envio com configurações básicas
-
-Request
-Body
-numbers
-array
-required
-Lista de números para envio
-
-Example: ["5511999999999@s.whatsapp.net"]
-
-type
-string
-required
-Tipo da mensagem
-
-Valores possíveis: text, image, video, audio, document, contact, location, list, button, poll, carousel
-folder
-string
-Nome da campanha de envio
-
-Example: "Campanha Janeiro"
-
-delayMin
-integer
-required
-Delay mínimo entre mensagens em segundos
-
-Example: 10
-
-delayMax
-integer
-required
-Delay máximo entre mensagens em segundos
-
-Example: 30
-
-scheduled_for
-integer
-required
-Timestamp em milissegundos ou minutos a partir de agora para agendamento
-
-Example: 1706198400000
-
-info
-string
-Informações adicionais sobre a campanha
-
-delay
-integer
-Delay fixo entre mensagens (opcional)
-
-mentions
-string
-Menções na mensagem em formato JSON
-
-text
-string
-Texto da mensagem
-
-linkPreview
-boolean
-Habilitar preview de links em mensagens de texto. O preview será gerado automaticamente a partir da URL contida no texto.
-
-linkPreviewTitle
-string
-Título personalizado para o preview do link (opcional)
-
-linkPreviewDescription
-string
-Descrição personalizada para o preview do link (opcional)
-
-linkPreviewImage
-string
-URL ou dados base64 da imagem para o preview do link (opcional)
-
-linkPreviewLarge
-boolean
-Se deve usar preview grande ou pequeno (opcional, padrão false)
-
-file
-string
-URL da mídia ou arquivo (quando type é image, video, audio, document, etc.)
-
-docName
-string
-Nome do arquivo (quando type é document)
-
-fullName
-string
-Nome completo (quando type é contact)
-
-phoneNumber
-string
-Número do telefone (quando type é contact)
-
-organization
-string
-Organização (quando type é contact)
-
-email
-string
-Email (quando type é contact)
-
-url
-string
-URL (quando type é contact)
-
-latitude
-number
-Latitude (quando type é location)
-
-longitude
-number
-Longitude (quando type é location)
-
-name
-string
-Nome do local (quando type é location)
-
-address
-string
-Endereço (quando type é location)
-
-footerText
-string
-Texto do rodapé (quando type é list, button, poll ou carousel)
-
-buttonText
-string
-Texto do botão (quando type é list, button, poll ou carousel)
-
-listButton
-string
-Texto do botão da lista (quando type é list)
-
-selectableCount
-integer
-Quantidade de opções selecionáveis (quando type é poll)
-
-choices
-array
-Lista de opções (quando type é list, button, poll ou carousel). Para carousel, use formato específico com [texto], {imagem} e botões
-
-imageButton
-string
-URL da imagem para o botão (quando type é button)
-
-Responses
-
-200
-campanha criada com sucesso
-Response Example
-
-{
-  "folder_id": "string",
-  "count": 0,
-  "status": "queued"
-}
-
-400
-Erro nos parâmetros da requisição
-Response Example
-
-{
-  "error": "string"
-}
-
-401
-Erro de autenticação
-Response Example
-
-{
-  "error": "string"
-}
-
-409
-Conflito - campanha já existe
-
-500
-Erro interno do servidor
-Response Example
-
-{
-  "error": "string"
-}
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/sender/simple \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "numbers": [
-    "558197628611@s.whatsapp.net","558189779423@s.whatsapp.net"
-  ],
-  "type": "text",
-  "delayMin": 10,
-  "delayMax": 30,
-  "info": "string",
-  "delay": 0,
-  "mentions": "string",
-  "text": "string",
-  "linkPreview": false,
-  "linkPreviewTitle": "string",
-  "linkPreviewDescription": "string",
-  "linkPreviewImage": "string",
-  "linkPreviewLarge": false,
-  "file": "string",
-  "docName": "string",
-  "fullName": "string",
-  "phoneNumber": "string",
-  "organization": "string",
-  "email": "string",
-  "url": "string",
-  "latitude": 0,
-  "longitude": 0,
-  "name": "string",
-  "address": "string",
-  "footerText": "string",
-  "buttonText": "string",
-  "listButton": "string",
-  "selectableCount": 0,
-  "choices": [
-    "string"
-  ],
-  "imageButton": "string"
-}'
-
-/sender/advanced
-Criar envio em massa avançado
-Cria um novo envio em massa com configurações avançadas, permitindo definir múltiplos destinatários e mensagens com delays personalizados.
-
-Request
-Body
-delayMin
-integer
-Delay mínimo entre mensagens (segundos)
-
-Example: 3
-
-delayMax
-integer
-Delay máximo entre mensagens (segundos)
-
-Example: 6
-
-info
-string
-Descrição ou informação sobre o envio em massa
-
-Example: "Campanha de lançamento"
-
-scheduled_for
-integer
-Timestamp em milissegundos (date unix) ou minutos a partir de agora para agendamento
-
-Example: 1
-
-messages
-array
-required
-Lista de mensagens a serem enviadas
-
-Responses
-
-200
-Mensagens adicionadas à fila com sucesso
-Response Example
-
-{
-  "folder_id": "string",
-  "count": 0,
-  "status": "queued"
-}
-
-400
-Erro nos parâmetros da requisição
-Response Example
-
-{
-  "error": "Formato de número inválido"
-}
-
-401
-Não autorizado - token inválido ou ausente
-Response Example
-
-{
-  "error": "Token inválido ou ausente"
-}
-
-500
-Erro interno do servidor
-Response Example
-
-{
-  "error": "string"
-}
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/sender/advanced \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "delayMin": 3,
-  "delayMax": 6,
-  "info": "teste avançado",
-  "scheduled_for": 1,
-  "messages": [
-    {
-      "number": "558189779423",
-      "type": "text",
-      "text": "First message"
-    },
-    {
-      "number": "558189779423",
-      "type": "button",
-      "text": "Promoção Especial!\nConfira nossas ofertas incríveis",
-      "footerText": "Válido até 31/12/2024",
-      "imageButton": "https://exemplo.com/banner-promocao.jpg",
-      "choices": [
-        "Ver Ofertas|https://loja.exemplo.com/ofertas",
-        "Falar com Vendedor|reply:vendedor",
-        "Copiar Cupom|copy:PROMO2024"
-      ]
-    },
-    {
-      "number": "558189779423",
-      "type": "list",
-      "text": "Escolha sua categoria preferida:",
-      "listButton": "Ver Categorias",
-      "choices": [
-        "[Eletrônicos]",
-        "Smartphones|eletronicos_smartphones",
-        "Notebooks|eletronicos_notebooks",
-        "[Roupas]",
-        "Camisetas|roupas_camisetas",
-        "Sapatos|roupas_sapatos"
-      ]
-    },
-    {
-      "number": "5511999999999",
-      "type": "document",
-      "file": "https://example.com/doc.pdf",
-      "docName": "Documento.pdf"
-    },
-    {
-      "number": "5511999999999",
-      "type": "carousel",
-      "text": "Conheça nossos produtos",
-      "choices": [
-        "[Smartphone XYZ\nO mais avançado smartphone da linha]",
-        "{https://exemplo.com/produto1.jpg}",
-        "Copiar Código|copy:PROD123",
-        "Ver no Site|https://exemplo.com/xyz",
-        "[Notebook ABC\nO notebook ideal para profissionais]",
-        "{https://exemplo.com/produto2.jpg}",
-        "Copiar Código|copy:NOTE456",
-        "Comprar Online|https://exemplo.com/abc"
-      ]
-    }
-  ]
-}'
-
-/sender/edit
-Controlar campanha de envio em massa
-Permite controlar campanhas de envio de mensagens em massa através de diferentes ações:
-
-Ações Disponíveis:
-🛑 stop - Pausar campanha
-
-Pausa uma campanha ativa ou agendada
-Altera o status para "paused"
-Use quando quiser interromper temporariamente o envio
-Mensagens já enviadas não são afetadas
-▶️ continue - Continuar campanha
-
-Retoma uma campanha pausada
-Altera o status para "scheduled"
-Use para continuar o envio após pausar uma campanha
-Não funciona em campanhas já concluídas ("done")
-🗑️ delete - Deletar campanha
-
-Remove completamente a campanha
-Deleta apenas mensagens NÃO ENVIADAS (status "scheduled")
-Mensagens já enviadas são preservadas no histórico
-Operação é executada de forma assíncrona
-Status de Campanhas:
-scheduled: Agendada para envio
-sending: Enviando mensagens
-paused: Pausada pelo usuário
-done: Concluída (não pode ser alterada)
-deleting: Sendo deletada (operação em andamento)
-Request
-Body
-folder_id
-string
-required
-Identificador único da campanha de envio
-
-Example: "folder_123"
-
-action
-string
-required
-Ação a ser executada na campanha:
-
-stop: Pausa a campanha (muda para status "paused")
-continue: Retoma campanha pausada (muda para status "scheduled")
-delete: Remove campanha e mensagens não enviadas (assíncrono)
-Valores possíveis: stop, continue, delete
-Example: "stop"
-
-Responses
-
-200
-Ação realizada com sucesso
-Response Example
-
-null
-
-400
-Requisição inválida
-Response Example
-
-{
-  "error": "folder_id is required"
-}
-
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/sender/edit \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "folder_id": "folder_123",
-  "action": "stop"
-}'
-
-
-/sender/cleardone
-Limpar mensagens enviadas
-Inicia processo de limpeza de mensagens antigas em lote que já foram enviadas com sucesso. Por padrão, remove mensagens mais antigas que 7 dias.
-
-Request
-Body
-hours
-integer
-Quantidade de horas para manter mensagens. Mensagens mais antigas que esse valor serão removidas.
-
-Example: 168
-
-Responses
-
-200
-Limpeza iniciada com sucesso
-Response Example
-
-{
-  "status": "cleanup started"
-}
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/sender/cleardone \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "hours": 168
-}'
-
-
-/sender/clearall
-Limpar toda fila de mensagens
-Remove todas as mensagens da fila de envio em massa, incluindo mensagens pendentes e já enviadas. Esta é uma operação irreversível.
-
-Responses
-
-200
-Fila de mensagens limpa com sucesso
-Response Example
-
-{
-  "status": "processed",
-  "messages_deleted": 150,
-  "folders_deleted": 3
-}
-
-401
-Não autorizado - token inválido ou ausente
-Response Example
-
-{
-  "error": "Token inválido ou ausente"
-}
-
-500
-Erro interno do servidor
-Response Example
-
-{
-  "error": "string"
-}
-
-
-curl --request DELETE \
-  --url https://atendimento.uazapi.com/sender/clearall \
-  --header 'Accept: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7'
-
-
-/sender/listfolders
-Listar campanhas de envio
-Retorna todas as campanhas de mensagens em massa com possibilidade de filtro por status
-
-Parameters
-Query Parameters
-status
-string
-Filtrar campanhas por status
-
-Responses
-
-200
-Lista de campanhas retornada com sucesso
-Response Example
-
-[
-  {
-    "id": "string",
-    "info": "string",
-    "status": "ativo",
-    "scheduled_for": 0,
-    "delayMax": 0,
-    "delayMin": 0,
-    "log_delivered": 0,
-    "log_failed": 0,
-    "log_played": 0,
-    "log_read": 0,
-    "log_sucess": 0,
-    "log_total": 0,
-    "owner": "string",
-    "created": "2024-01-15T10:30:00Z",
-    "updated": "2024-01-15T10:30:00Z"
-  }
-]
-
-500
-Erro interno do servidor
-Response Example
-
-{
-  "error": "string"
-}
-
-
-curl --request GET \
-  --url https://atendimento.uazapi.com/sender/listfolders \
-  --header 'Accept: application/json'
-
-
-/sender/listmessages
-Listar mensagens de uma campanha
-Retorna a lista de mensagens de uma campanha específica, com opções de filtro por status e paginação
-
-Request
-Body
-folder_id
-string
-required
-ID da campanha a ser consultada
-
-messageStatus
-string
-Status das mensagens para filtrar
-
-Valores possíveis: Scheduled, Sent, Failed
-page
-integer
-Número da página para paginação
-
-pageSize
-integer
-Quantidade de itens por página
-
-Responses
-
-200
-Lista de mensagens retornada com sucesso
-Response Example
-
-{
-  "messages": [
-    {
-      "id": "123e4567-e89b-12d3-a456-426614174000",
-      "messageid": "string",
-      "chatid": "string",
-      "sender": "string",
-      "senderName": "string",
-      "isGroup": false,
-      "fromMe": false,
-      "messageType": "string",
-      "source": "string",
-      "messageTimestamp": 0,
-      "status": "string",
-      "text": "string",
-      "quoted": "string",
-      "edited": "string",
-      "reaction": "string",
-      "vote": "string",
-      "convertOptions": "string",
-      "buttonOrListid": "string",
-      "owner": "string",
-      "error": "string",
-      "content": null,
-      "wasSentByApi": false,
-      "sendFunction": "string",
-      "sendPayload": null,
-      "fileURL": "string",
-      "send_folder_id": "string",
-      "track_source": "string",
-      "track_id": "string",
-      "ai_metadata": {
-        "agent_id": "string",
-        "request": {
-          "messages": [
-            "item"
-          ],
-          "tools": [
-            "item"
-          ],
-          "options": {
-            "model": "string",
-            "temperature": 0,
-            "maxTokens": 0,
-            "topP": 0,
-            "frequencyPenalty": 0,
-            "presencePenalty": 0
-          }
-        },
-        "response": {
-          "choices": [
-            "item"
-          ],
-          "toolResults": [
-            "item"
-          ],
-          "error": "string"
-        }
-      },
-      "sender_pn": "string",
-      "sender_lid": "string"
-    }
-  ],
-  "pagination": {
-    "total": 0,
-    "page": 0,
-    "pageSize": 0,
-    "lastPage": 0
-  }
-}
-
-400
-Requisição inválida
-Response Example
-
-{
-  "error": "folder_id is required"
-}
-
-500
-Erro interno do servidor
-Response Example
-
-{
-  "error": "Failed to fetch messages"
-}
-
-curl --request POST \
-  --url https://atendimento.uazapi.com/sender/listmessages \
-  --header 'Accept: application/json' \
-  --header 'Content-Type: application/json' \
-  --header 'token: 9e6a1d8c-4f91-4bfd-b0cd-0eb15259b6c7' \
-  --data '{
-  "folder_id": "string",
-  "messageStatus": "Scheduled",
-  "page": 1,
-  "pageSize": 1
+  "track_id": "msg_123456789",
+  "async": false
 }'

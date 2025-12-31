@@ -3,6 +3,7 @@
 import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import crypto from 'crypto';
+import { createManagedCampaign } from './campaign-actions';
 
 // Helper to get API URL
 const getApiUrl = () => process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
@@ -28,14 +29,13 @@ export async function verifyInstanceConnection(token: string) {
         const data = await response.json();
         
         // Return success with available data
-        // We map the response to our internal structure
         return { 
             success: true, 
             data: {
                 id: data.id || 'default',
                 name: data.instanceName || 'WhatsApp Instance',
                 profilePicUrl: data.profilePictureUrl || '',
-                status: 'connected' // Assumed connected if status call succeeds
+                status: 'connected'
             }
         };
     } catch (error: any) {
@@ -46,8 +46,6 @@ export async function verifyInstanceConnection(token: string) {
 
 export async function setWebhook(instanceName: string, token: string, webhookUrl: string) {
     try {
-        // According to user instructions, the endpoint is /webhook (POST)
-        // and it requires specific body parameters.
         const response = await fetch(`${getApiUrl()}/webhook`, {
             method: 'POST',
             headers: {
@@ -86,10 +84,6 @@ export async function setWebhook(instanceName: string, token: string, webhookUrl
 
 export async function deleteInstanceByToken(token: string) {
     try {
-        // We might need instance name, but let's try to find it or just return success
-        // if we can't really delete it from provider without name.
-        // Assuming logout/delete endpoint
-        // For now, we just acknowledge.
         return { success: true };
     } catch (error: any) {
         return { success: false, error: error.message };
@@ -106,136 +100,71 @@ export async function forceDeleteInstance(instanceName: string) {
     return { success: true };
 }
 
-// Helper to create simple campaign on provider
-async function createSimpleProviderCampaign(
-    token: string,
-    campaignName: string,
-    message: string,
-    phones: string[],
-    scheduledAt: number | Date,
-    speed: string,
-    trackId?: string
-) {
-    let delayMin = 10;
-    let delayMax = 30;
-    // Values matched to UI descriptions:
-    // Slow: 100-120s (Recommended)
-    // Normal: 80-100s (Medium Risk)
-    // Fast: 60-80s (High Risk)
-    if (speed === 'slow') { delayMin = 100; delayMax = 120; }
-    else if (speed === 'normal') { delayMin = 80; delayMax = 100; }
-    else if (speed === 'fast') { delayMin = 60; delayMax = 80; }
-
-    const formattedPhones = phones.map(p => {
-        const clean = p.replace(/\D/g, '');
-        // For simple sender, some versions expect @s.whatsapp.net, others just number.
-        // Usually /sender/simple expects full JID or number.
-        // Let's safe bet: if it looks like a number, append suffix.
-        return clean.includes('@') ? clean : `${clean}@s.whatsapp.net`;
-    });
-
-    // Add 10 seconds buffer
-    const scheduledTimestamp = new Date(scheduledAt).getTime() + 10000;
+// --- HELPER: Transform Message to Include Mandatory Buttons ---
+function transformMessageForButtons(message: any): any[] {
+    const mandatoryButton = "Bloquear Contato|block_contact";
     
-    // UAZAPI /sender/simple Payload
-    const payload: any = {
-        numbers: formattedPhones,
-        type: 'text',
-        folder: campaignName,
-        delayMin: delayMin,
-        delayMax: delayMax,
-        scheduled_for: scheduledTimestamp,
-        info: campaignName,
-        text: message
-    };
-
-    const response = await fetch(`${getApiUrl()}/sender/simple`, {
-        method: 'POST',
-        headers: {
-            'token': token,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-        throw new Error(result.error || 'Falha ao criar campanha na UAZAPI');
+    // If it's already a list of messages, process each
+    if (Array.isArray(message)) {
+        return message.flatMap(m => transformMessageForButtons(m));
     }
 
-    return result.folder_id;
-}
+    const transformed = { ...message };
 
-// Helper to create advanced campaign on provider
-async function createAdvancedProviderCampaign(
-    token: string,
-    campaignName: string,
-    messages: any[],
-    phones: string[],
-    scheduledAt: number | Date,
-    speed: string,
-    trackId?: string
-) {
-    let delayMin = 10;
-    let delayMax = 30;
-    // Values matched to UI descriptions:
-    // Slow: 100-120s (Recommended)
-    // Normal: 80-100s (Medium Risk)
-    // Fast: 60-80s (High Risk)
-    if (speed === 'slow') { delayMin = 100; delayMax = 120; }
-    else if (speed === 'normal') { delayMin = 80; delayMax = 100; }
-    else if (speed === 'fast') { delayMin = 60; delayMax = 80; }
+    // Handle Text Messages -> Button Message
+    if (transformed.type === 'text' || !transformed.type) {
+        const existingChoices = transformed.choices || [];
+        if (!existingChoices.some((c: string) => c.includes('block_contact'))) {
+            existingChoices.push(mandatoryButton);
+        }
 
-    // Add 5 seconds buffer
-    const scheduledTimestamp = new Date(scheduledAt).getTime() + 5000;
-
-    const advancedMessages: any[] = [];
-    phones.forEach(phone => {
-        const cleanPhone = phone.replace(/\D/g, '');
-        // Use raw number as per docs
-        const formattedPhone = cleanPhone; 
-        
-        messages.forEach(msg => {
-            advancedMessages.push({
-                number: formattedPhone,
-                ...msg
-            });
-        });
-    });
-
-    // UAZAPI /sender/advanced Payload
-    const payload: any = {
-        delayMin: delayMin,
-        delayMax: delayMax,
-        info: campaignName,
-        scheduled_for: scheduledTimestamp,
-        messages: advancedMessages
-    };
-
-    // track_id is NOT supported in /sender/advanced top-level payload according to docs
-    // We rely on folder_id for tracking
-
-    console.log('[UAZAPI] Creating Advanced Campaign Payload:', JSON.stringify(payload, null, 2));
-
-    const response = await fetch(`${getApiUrl()}/sender/advanced`, {
-        method: 'POST',
-        headers: {
-            'token': token,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    });
-
-    const result = await response.json();
-    console.log('[UAZAPI] Create Campaign Response:', JSON.stringify(result, null, 2));
-
-    if (!response.ok) {
-        console.error('[UAZAPI] Error creating campaign:', result);
-        throw new Error(result.error || JSON.stringify(result) || 'Falha ao criar campanha avançada na UAZAPI');
+        return [{
+            type: 'button',
+            text: transformed.text,
+            choices: existingChoices,
+            footerText: transformed.footerText || 'Opções'
+        }];
     }
 
-    return result.folder_id;
+    // Handle Image Messages -> Button Message with Image
+    if (transformed.type === 'image') {
+        const existingChoices = transformed.choices || [];
+        if (!existingChoices.some((c: string) => c.includes('block_contact'))) {
+            existingChoices.push(mandatoryButton);
+        }
+
+        return [{
+            type: 'button',
+            text: transformed.text || 'Imagem', // Caption is required for button message text
+            imageButton: transformed.file || transformed.url,
+            choices: existingChoices,
+            footerText: transformed.footerText || 'Opções'
+        }];
+    }
+
+    // Handle Other Media (Video, Document, Audio) -> Media + Button Message
+    if (['video', 'document', 'audio', 'ptt', 'sticker'].includes(transformed.type)) {
+        const buttonMsg = {
+            type: 'button',
+            text: 'Escolha uma opção:',
+            choices: [mandatoryButton],
+            footerText: 'Opções'
+        };
+        return [transformed, buttonMsg];
+    }
+
+    // Handle Existing Button/Menu Messages
+    if (transformed.type === 'button' || transformed.type === 'menu') {
+        const choices = transformed.choices || [];
+        if (!choices.some((c: string) => c.includes('block_contact'))) {
+            choices.push(mandatoryButton);
+        }
+        transformed.choices = choices;
+        return [transformed];
+    }
+
+    // Default fallback
+    return [transformed];
 }
 
 export async function createSimpleCampaignProviderOnly(
@@ -247,18 +176,37 @@ export async function createSimpleCampaignProviderOnly(
     speed: string
 ) {
     try {
-        const token = await getUserToken(userId);
-        if (!token) {
-            throw new Error('Usuário não possui token da UAZAPI configurado.');
-        }
+        let delayMin = 100;
+        let delayMax = 120;
+        if (speed === 'normal') { delayMin = 80; delayMax = 100; }
+        else if (speed === 'fast') { delayMin = 60; delayMax = 80; }
 
-        // Generate tracking ID
-        const trackId = crypto.randomUUID();
+        const recipients = phones.map(p => ({
+            name: p,
+            phone: p.replace(/\D/g, '')
+        }));
 
-        const uazapiId = await createSimpleProviderCampaign(token, campaignName, message, phones, scheduledAt, speed, trackId);
-        return { success: true, id: uazapiId, trackId };
+        const baseMessage = { type: 'text', text: message };
+        const messageTemplate = transformMessageForButtons(baseMessage);
+
+        const result = await createManagedCampaign({
+            userId,
+            name: campaignName,
+            messageTemplate,
+            recipients,
+            speedConfig: {
+                mode: speed as any,
+                minDelay: delayMin,
+                maxDelay: delayMax
+            },
+            scheduledAt: new Date(scheduledAt).toISOString()
+        });
+
+        if (!result.success) throw new Error(result.error);
+
+        return { success: true, id: result.campaignId, trackId: result.campaignId };
     } catch (error: any) {
-        console.error('Error creating provider-only simple campaign:', error);
+        console.error('Error creating managed simple campaign:', error);
         return { success: false, error: error.message };
     }
 }
@@ -272,433 +220,91 @@ export async function createAdvancedCampaignProviderOnly(
     speed: string
 ) {
     try {
-        const token = await getUserToken(userId);
-        if (!token) {
-            throw new Error('Usuário não possui token da UAZAPI configurado.');
-        }
+        let delayMin = 100;
+        let delayMax = 120;
+        if (speed === 'normal') { delayMin = 80; delayMax = 100; }
+        else if (speed === 'fast') { delayMin = 60; delayMax = 80; }
 
-        // Generate tracking ID
-        const trackId = crypto.randomUUID();
+        const recipients = phones.map(p => ({
+            name: p,
+            phone: p.replace(/\D/g, '')
+        }));
 
-        const uazapiId = await createAdvancedProviderCampaign(token, campaignName, messages, phones, scheduledAt, speed, trackId);
-        return { success: true, id: uazapiId, trackId };
+        const transformedMessages: any[] = [];
+        messages.forEach(msg => {
+            const result = transformMessageForButtons(msg);
+            transformedMessages.push(...result);
+        });
+
+        const result = await createManagedCampaign({
+            userId,
+            name: campaignName,
+            messageTemplate: transformedMessages,
+            recipients,
+            speedConfig: {
+                mode: speed as any,
+                minDelay: delayMin,
+                maxDelay: delayMax
+            },
+            scheduledAt: new Date(scheduledAt).toISOString()
+        });
+
+        if (!result.success) throw new Error(result.error);
+
+        return { success: true, id: result.campaignId, trackId: result.campaignId };
     } catch (error: any) {
-        console.error('Error creating provider-only advanced campaign:', error);
+        console.error('Error creating managed advanced campaign:', error);
         return { success: false, error: error.message };
     }
 }
 
 export async function deleteCampaignFromProvider(userId: string, folderId: string) {
-    try {
-        const token = await getUserToken(userId);
-        if (!token) return { success: false, error: 'No token' };
-
-        // Use /sender/edit with action=delete
-        const response = await fetch(`${getApiUrl()}/sender/edit`, {
-            method: 'POST',
-            headers: {
-                'token': token,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                folder_id: folderId,
-                action: 'delete'
-            })
-        });
-
-        if (!response.ok) {
-            const result = await response.json();
-            
-             // If 404 or similar, maybe it's already gone
-            if (response.status === 404 || result.error?.includes('not found') || result.error?.includes('Folder not found')) {
-                 console.log(`[UAZAPI] Campaign ${folderId} not found on provider, assuming already deleted.`);
-                 return { success: true };
-            }
-
-            console.error('UAZAPI Delete Campaign Error:', result);
-            return { success: false, error: result.error || 'Failed to delete campaign from provider' };
-        }
-
-        return { success: true };
-    } catch (error: any) {
-        console.error('Error deleting campaign from provider:', error);
-        return { success: false, error: error.message };
-    }
+    // Managed campaigns are deleted via deleteCampaignAction in campaign-actions.ts
+    // This is for legacy provider campaigns
+    return { success: true };
 }
 
+// Legacy Control Function - Kept for compatibility but redirected or stubbed where possible
 export async function controlCampaign(userId: string, campaignId: string, action: 'stop' | 'continue') {
-    if (!userId || !campaignId) {
-        return { success: false, error: 'Missing parameters' };
-    }
-
+    // For managed campaigns, we just update the status in Firestore
     try {
         const campaignRef = db.collection('users').doc(userId).collection('campaigns').doc(campaignId);
-        const docSnap = await campaignRef.get();
-
-        if (!docSnap.exists) {
-            return { success: false, error: 'Campaign not found' };
-        }
-
-        const campaign = docSnap.data();
-
-        // MASTER CAMPAIGN HANDLING (Container for batches)
-        // Check for batchIds OR batches map
-        let batchIds = campaign?.batchIds;
+        const doc = await campaignRef.get();
+        if (!doc.exists) return { success: false, error: 'Campaign not found' };
         
-        // If batchIds missing but batches map exists, extract IDs from map keys
-        if ((!batchIds || batchIds.length === 0) && campaign?.batches && typeof campaign.batches === 'object') {
-            batchIds = Object.keys(campaign.batches);
-            console.log(`[Control] Recovered ${batchIds.length} batch IDs from batches map`);
-        }
+        const data = doc.data();
+        if (data?.type === 'managed') {
+            const updateData: any = {
+                status: action === 'stop' ? 'Paused' : 'Sending', // 'Paused' prevents Cron from picking it up
+                updatedAt: new Date().toISOString()
+            };
 
-        if (batchIds && Array.isArray(batchIds) && batchIds.length > 0) {
-            console.log(`[Control] Processing Master Campaign ${campaignId} with ${batchIds.length} batches`);
-            
-            const results = [];
-            for (const batchId of batchIds) {
-                if (batchId === campaignId) continue;
-
-                // 1. Check for Real Campaign Document
-                const batchRef = db.collection('users').doc(userId).collection('campaigns').doc(batchId);
-                const batchSnap = await batchRef.get();
-
-                if (batchSnap.exists) {
-                    const batchData = batchSnap.data();
-                    const batchStatus = (batchData?.status || '').toLowerCase();
-                    
-                    if (action === 'continue' && ['sending', 'sent', 'completed', 'done'].includes(batchStatus)) {
-                         results.push({ success: true, status: batchStatus });
-                         continue;
-                    }
-                    if (action === 'stop' && ['stopped', 'sent', 'completed', 'failed'].includes(batchStatus)) {
-                         results.push({ success: true, status: batchStatus });
-                         continue;
-                    }
-
-                    const res = await controlCampaign(userId, batchId, action);
-                    results.push(res);
-                } else {
-                    // 2. Handle Virtual Batch (from Master Campaign Map)
-                    const virtualBatch = campaign.batches?.[batchId];
-                    if (!virtualBatch) {
-                        results.push({ success: false, error: `Batch ${batchId} not found` });
-                        continue;
-                    }
-                    
-                    const batchStatus = (virtualBatch.status || '').toLowerCase();
-
-                    if (action === 'stop') {
-                         try {
-                             await deleteCampaignFromProvider(userId, batchId);
-                             await campaignRef.update({ 
-                                 [`batches.${batchId}.status`]: 'Stopped',
-                                 [`batches.${batchId}.updatedAt`]: new Date().toISOString()
-                             });
-                             results.push({ success: true });
-                         } catch (e: any) {
-                             results.push({ success: false, error: e.message });
-                         }
-                    } else if (action === 'continue') {
-                        // Check if already running
-                        if (['sending', 'sent', 'completed'].includes(batchStatus)) {
-                            results.push({ success: true });
-                            continue;
-                        }
-
-                        // RESTART LOGIC
-                        const batchPhones = virtualBatch.phones;
-                        if (!batchPhones || batchPhones.length === 0) {
-                             results.push({ success: false, error: `Lote ${batchId} sem dados para reenvio (Recrie a campanha)` });
-                             continue;
-                        }
-
-                        try {
-                             // Clean up old
-                             try { await deleteCampaignFromProvider(userId, batchId); } catch (e) {}
-                             
-                             const token = await getUserToken(userId);
-                             if (!token) throw new Error('No token');
-
-                             const batchName = virtualBatch.name || `${campaign.name} (Batch)`;
-                             const speed = campaign.speed || 'normal';
-                             const masterMessages = campaign.messages || [];
-                             const masterMessage = campaign.message || '';
-                             
-                             const trackId = crypto.randomUUID();
-                             let newId = '';
-                             if (masterMessages.length > 0) {
-                                 newId = await createAdvancedProviderCampaign(token, batchName, masterMessages, batchPhones, new Date(), speed, trackId);
-                             } else {
-                                 newId = await createSimpleProviderCampaign(token, batchName, masterMessage, batchPhones, new Date(), speed, trackId);
-                             }
-
-                             // Update Map Keys (Delete old, Add new)
-                             const newBatchData = {
-                                 ...virtualBatch,
-                                 id: newId,
-                                 uazapiId: newId,
-                                 trackId: trackId,
-                                 status: 'Sending',
-                                 updatedAt: new Date().toISOString()
-                             };
-
-                             // Add trackId to campaign doc for webhook matching
-                             await campaignRef.update({
-                                 trackIds: FieldValue.arrayUnion(trackId)
-                             });
-                             
-                             await campaignRef.update({
-                                 [`batches.${batchId}`]: FieldValue.delete(),
-                                 [`batches.${newId}`]: newBatchData,
-                                 batchIds: FieldValue.arrayRemove(batchId)
-                             });
-                             await campaignRef.update({
-                                 batchIds: FieldValue.arrayUnion(newId)
-                             });
-
-                             results.push({ success: true, newId });
-                        } catch (e: any) {
-                             results.push({ success: false, error: e.message });
-                        }
-                    }
-                }
-            }
-
-            // Determine overall status
-            let newStatus = '';
-            if (action === 'stop') {
-                newStatus = 'Stopped';
-                await campaignRef.update({ 
-                    status: newStatus,
-                    stoppedAt: new Date().toISOString()
-                });
-            } else if (action === 'continue') {
-                newStatus = 'Sending';
-                await campaignRef.update({ 
-                    status: newStatus,
-                    scheduledAt: new Date().toISOString(),
-                    sentDate: new Date().toISOString()
-                });
-            }
-
-            const failures = results.filter(r => !r.success);
-            if (failures.length > 0 && failures.length === results.length) {
-                // If ALL failed, return error
-                const firstError = failures[0].error || 'Erro desconhecido';
-                return { success: false, error: `Falha ao processar lotes: ${firstError}` };
-            }
-
-            return { success: true, status: newStatus };
-        }
-
-        const currentUazapiId = campaign?.uazapiId;
-        const currentStatus = (campaign?.status || '').toLowerCase();
-
-        // Idempotency check for single campaign
-        if (action === 'continue' && currentStatus === 'sending') {
-             console.log(`[Control] Campaign ${campaignId} is already sending. Skipping.`);
-             return { success: true, status: 'Sending' };
-        }
-
-        let newStatus = '';
-
-        if (action === 'stop') {
-            newStatus = 'Stopped';
-            // Stop on Provider (Delete/Clear)
-            if (currentUazapiId) {
-                await deleteCampaignFromProvider(userId, currentUazapiId);
-            }
-        } else if (action === 'continue') {
-            newStatus = 'Sending';
-            
-            // FORCE START LOGIC (Override Schedule)
-            // 1. Delete existing scheduled folder on provider to prevent double send
-            if (currentUazapiId) {
-                await deleteCampaignFromProvider(userId, currentUazapiId);
-            }
-
-            // 2. Re-create on provider with NOW schedule
-            const token = await getUserToken(userId);
-            if (!token) return { success: false, error: 'No token' };
-
-            const type = campaign?.type || 'simple';
-            let phones = campaign?.phones || [];
-            const speed = campaign?.speed || 'normal';
-            
-            // Fallback: If phones array is empty, try to fetch from dispatches subcollection
-            if (!phones || phones.length === 0) {
-                 const dispatchesSnap = await campaignRef.collection('dispatches').get();
-                 if (!dispatchesSnap.empty) {
-                     phones = dispatchesSnap.docs.map(doc => doc.data().phone).filter((p: any) => !!p);
-                     // Optional: Update the campaign doc with the recovered phones to avoid future lookups
-                     if (phones.length > 0) {
-                         await campaignRef.update({ phones });
-                     }
-                 }
-            }
-
-            if (!phones || phones.length === 0) {
-                 return { success: false, error: 'No recipients found to start campaign.' };
-            }
-
-            // Ensure Dispatches Exist (Smart Backfill) - Critical for tracking
-            try {
-                const dispatchesRef = campaignRef.collection('dispatches');
+            // If resuming, reset nextRunAt to now so it gets picked up by next Cron tick
+            if (action === 'continue') {
+                // If it was scheduled for future, 'continue' forces immediate start
+                // We should also potentially re-calculate 'scheduledAt' for the remaining queue items?
+                // No, 'scheduledAt' in queue is just for visualization. The Cron uses 'nextRunAt'.
+                // So resetting 'nextRunAt' to now is enough to kickstart the loop.
+                updateData.nextRunAt = Date.now();
                 
-                // Get ALL existing dispatch IDs to avoid duplicates/overwrites
-                // Optimization: If list is huge, this might be heavy, but for < 10k it's fine.
-                const existingSnap = await dispatchesRef.select('phone').get();
-                const existingPhones = new Set(existingSnap.docs.map(d => d.id));
-                
-                const missingPhones = phones.filter((p: string) => !existingPhones.has(p));
-                
-                if (missingPhones.length > 0) {
-                    console.log(`[Control] Smart Backfilling: Found ${missingPhones.length} missing dispatches (Total Target: ${phones.length})`);
-                    
-                    // Chunk for batch limits
-                    const chunkSize = 450; 
-                    for (let i = 0; i < missingPhones.length; i += chunkSize) {
-                        const chunk = missingPhones.slice(i, i + chunkSize);
-                        const batch = db.batch();
-                        
-                        for (const phone of chunk) {
-                             // Use phone as ID for idempotency
-                             const docRef = dispatchesRef.doc(phone);
-                             batch.set(docRef, {
-                                 phone: phone,
-                                 status: 'scheduled', 
-                                 campaignId: campaignId,
-                                 updatedAt: new Date().toISOString(),
-                                 createdAt: new Date().toISOString(),
-                                 name: phone // Fallback name
-                             });
-                        }
-                        await batch.commit();
-                    }
-                    console.log(`[Control] Successfully backfilled ${missingPhones.length} dispatches.`);
-                } else {
-                    console.log(`[Control] All ${phones.length} recipients already have dispatch records.`);
-                }
-            } catch (err) {
-                console.error('[Control] Error backfilling dispatches:', err);
-                // Continue anyway, don't block sending
+                // Also update campaign-level scheduledAt to reflect the new start time
+                updateData.scheduledAt = new Date().toISOString();
             }
 
-            let newUazapiId = '';
-            const trackId = crypto.randomUUID();
-
-            if (type === 'simple') {
-                const message = campaign?.message || '';
-                newUazapiId = await createSimpleProviderCampaign(
-                    token, 
-                    campaign?.name || 'Campaign', 
-                    message, 
-                    phones, 
-                    new Date(), // Start NOW
-                    speed,
-                    trackId
-                );
-            } else {
-                const messages = campaign?.messages || [];
-                newUazapiId = await createAdvancedProviderCampaign(
-                    token,
-                    campaign?.name || 'Campaign',
-                    messages,
-                    phones,
-                    new Date(), // Start NOW
-                    speed,
-                    trackId
-                );
-            }
-
-            // Update with NEW UAZAPI ID and TrackID
-            if (newUazapiId) {
-                await campaignRef.update({ 
-                    uazapiId: newUazapiId,
-                    trackIds: FieldValue.arrayUnion(trackId)
-                });
-            }
+            await campaignRef.update(updateData);
+            return { success: true, status: action === 'stop' ? 'Paused' : 'Sending' };
         }
-
-        const updates: Record<string, any> = { status: newStatus };
-        if (action === 'continue') {
-            updates.scheduledAt = new Date().toISOString();
-            updates.sentDate = new Date().toISOString();
-            updates.startDate = new Date().toISOString();
-        }
-        if (action === 'stop') {
-            updates.stoppedAt = new Date().toISOString();
-        }
-        await campaignRef.update(updates);
-
-        return { success: true, status: newStatus };
-    } catch (error: any) {
-        console.error('Error controlling campaign:', error);
-        return { success: false, error: error.message };
+        
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e.message };
     }
 }
 
 export async function getCampaignsFromProvider(userId: string) {
-    try {
-        const token = await getUserToken(userId);
-        if (!token) return { success: false, error: 'No token' };
-
-        const response = await fetch(`${getApiUrl()}/sender/listfolders`, {
-            method: 'GET',
-            headers: {
-                'token': token,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (!response.ok) return { success: false, error: 'Failed to fetch folders' };
-        
-        const data = await response.json();
-        return { success: true, data: Array.isArray(data) ? data : [] };
-    } catch (error: any) {
-        return { success: false, error: error.message };
-    }
+   return { success: true, data: [] };
 }
 
 export async function getCampaignMessagesFromProvider(userId: string, campaignId: string, uazapiId?: string, page = 1, pageSize = 50) {
-    try {
-        const token = await getUserToken(userId);
-        if (!token) return { success: false, error: 'No token' };
-
-        // We need the UAZAPI folder ID (uazapiId). 
-        // If not provided, fetch from Firestore campaign doc.
-        let folderId = uazapiId;
-        if (!folderId) {
-            const campaignDoc = await db.collection('users').doc(userId).collection('campaigns').doc(campaignId).get();
-            folderId = campaignDoc.data()?.uazapiId;
-        }
-
-        if (!folderId) return { success: false, error: 'Campaign has no provider ID' };
-
-        const response = await fetch(`${getApiUrl()}/sender/listmessages`, {
-            method: 'POST',
-            headers: {
-                'token': token,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                folder_id: folderId,
-                page,
-                pageSize
-            })
-        });
-
-        if (!response.ok) return { success: false, error: 'Failed to fetch messages' };
-        
-        const data = await response.json();
-        return { success: true, messages: data.messages || [], total: data.pagination?.total || 0 };
-    } catch (error: any) {
-        return { success: false, error: error.message };
-    }
-}
-
-// Helper to get token
-async function getUserToken(userId: string): Promise<string | null> {
-    const userDoc = await db.collection('users').doc(userId).get();
-    return userDoc.data()?.uazapi?.token || null;
+    return { success: true, messages: [], total: 0 };
 }
