@@ -4,11 +4,5 @@
       "path": "/api/cron/process-campaigns",
       "schedule": "* * * * *"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
   ]
 }

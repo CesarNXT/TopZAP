@@ -4,6 +4,8 @@ import { db } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 import { createManagedCampaign } from './campaign-actions';
+import { format } from 'date-fns';
+import { getNextValidTime, ScheduleRule } from '@/lib/campaign-schedule';
 
 // Helper to get API URL
 const getApiUrl = () => process.env.UAZAPI_URL || 'https://atendimento.uazapi.com';
@@ -281,14 +283,91 @@ export async function controlCampaign(userId: string, campaignId: string, action
 
             // If resuming, reset nextRunAt to now so it gets picked up by next Cron tick
             if (action === 'continue') {
-                // If it was scheduled for future, 'continue' forces immediate start
-                // We should also potentially re-calculate 'scheduledAt' for the remaining queue items?
-                // No, 'scheduledAt' in queue is just for visualization. The Cron uses 'nextRunAt'.
-                // So resetting 'nextRunAt' to now is enough to kickstart the loop.
-                updateData.nextRunAt = Date.now();
+                const now = new Date();
+                updateData.nextRunAt = now.getTime();
+                updateData.scheduledAt = now.toISOString();
+
+                // --- RESCHEDULE LOGIC ---
+                // 1. Allow Today (Force "Start Now" behavior)
+                const scheduleRules = (data.scheduleRules || []) as ScheduleRule[];
+                const todayStr = format(now, 'yyyy-MM-dd');
                 
-                // Also update campaign-level scheduledAt to reflect the new start time
-                updateData.scheduledAt = new Date().toISOString();
+                // Remove existing rule for today if any
+                const existingTodayIndex = scheduleRules.findIndex(r => r.date === todayStr);
+                if (existingTodayIndex >= 0) {
+                    scheduleRules.splice(existingTodayIndex, 1);
+                }
+                
+                // Add "Allow All Day" rule for today
+                scheduleRules.push({
+                    date: todayStr,
+                    start: '00:00',
+                    end: '23:59',
+                    active: true
+                });
+                updateData.scheduleRules = scheduleRules;
+
+                // 2. Reschedule Pending Items
+                const queueRef = campaignRef.collection('queue');
+                const pendingSnapshot = await queueRef.where('status', '==', 'pending').orderBy('scheduledAt').get();
+                
+                if (!pendingSnapshot.empty) {
+                    const speedConfig = data.speedConfig || { mode: 'slow', minDelay: 120, maxDelay: 300 };
+                    const avgDelay = ((speedConfig.minDelay + speedConfig.maxDelay) / 2) * 1000;
+                    const workingHours = data.workingHours || { start: "08:00", end: "18:00" };
+
+                    let currentPointer = now;
+                    let batch = db.batch();
+                    let opCount = 0;
+                    const batches: Record<string, any> = {}; 
+
+                    // Initialize with existing batches to preserve history
+                    const existingBatches = data.batches || {};
+                    Object.assign(batches, existingBatches);
+
+                    for (const doc of pendingSnapshot.docs) {
+                        // Calculate next valid time
+                        currentPointer = getNextValidTime(currentPointer, workingHours, scheduleRules);
+                        
+                        const newScheduledAt = currentPointer.toISOString();
+                        
+                        // Update Queue Item
+                        batch.update(doc.ref, { scheduledAt: newScheduledAt });
+                        opCount++;
+
+                        // Update Batches Metadata
+                        const dateKey = newScheduledAt.split('T')[0];
+                        if (!batches[dateKey]) {
+                            batches[dateKey] = {
+                                id: dateKey,
+                                name: `Lote ${Object.keys(batches).length + 1}`,
+                                scheduledAt: newScheduledAt,
+                                endTime: newScheduledAt,
+                                count: 0,
+                                status: 'pending',
+                                stats: { sent: 0, delivered: 0, failed: 0 }
+                            };
+                        }
+                        
+                        // Update batch end time to reflect the latest item
+                        batches[dateKey].endTime = newScheduledAt;
+                        
+                        // Prepare next time
+                        currentPointer = new Date(currentPointer.getTime() + avgDelay);
+
+                        if (opCount >= 450) { // Firestore batch limit safety
+                            await batch.commit();
+                            opCount = 0;
+                            batch = db.batch();
+                        }
+                    }
+
+                    if (opCount > 0) {
+                        await batch.commit();
+                    }
+                    
+                    updateData.batches = batches;
+                }
             }
 
             await campaignRef.update(updateData);
