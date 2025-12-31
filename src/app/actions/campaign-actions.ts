@@ -176,9 +176,77 @@ export async function createManagedCampaign(input: CreateManagedCampaignInput) {
       nextRunAt: effectiveStartDate.getTime(), // Timestamp for next execution
     };
 
-    const newCampaignRef = await campaignsRef.add(campaignDoc);
+    // Create a ref with auto-id, then set().
+    const newCampaignRef = campaignsRef.doc();
     const campaignId = newCampaignRef.id;
 
+    // --- INJECT CAMPAIGN ID INTO BUTTONS ---
+    // This ensures we can track exactly which campaign a button click came from.
+    const processedTemplate = messageTemplate.map((msg: any) => {
+        if (msg.choices && Array.isArray(msg.choices)) {
+            const newChoices = msg.choices.map((choice: string) => {
+                // Ignore section headers (for Lists)
+                if (choice.trim().startsWith('[')) return choice;
+
+                let text = choice;
+                let id = choice;
+                let suffix = ''; // For description or other parts
+
+                if (choice.includes('|')) {
+                    const parts = choice.split('|');
+                    text = parts[0];
+                    id = parts[1];
+                    // If there are more parts (e.g. description for list), keep them
+                    if (parts.length > 2) {
+                        suffix = '|' + parts.slice(2).join('|');
+                    }
+                }
+
+                // Check if it's a special button type that shouldn't have ID modified
+                // Special types usually have ID starting with specific prefixes
+                const isSpecial = id.startsWith('call:') || 
+                                  id.startsWith('copy:') || 
+                                  id.startsWith('url:') || 
+                                  id.startsWith('http:') || 
+                                  id.startsWith('https:');
+
+                if (!isSpecial) {
+                    // It's a Reply Button (or List Row). Inject Campaign ID.
+                    // New ID format: OriginalID_camp_CampaignID
+                    id = `${id}_camp_${campaignId}`;
+                }
+
+                return `${text}|${id}${suffix}`;
+            });
+            
+            // --- AUTOMATIC BLOCK BUTTON ADDITION ---
+            // If the user hasn't added a block button, we add one automatically.
+            // Check if there is already a button that looks like a block button (id contains 'block' or 'bloquear')
+            const hasBlockButton = newChoices.some((c: string) => {
+                 const id = c.split('|')[1] || '';
+                 return id.toLowerCase().includes('block') || id.toLowerCase().includes('bloquear');
+            });
+
+            if (!hasBlockButton && newChoices.length < 3) {
+                 // Add "Bloquear Contato" button
+                 // ID format: block_contact_camp_CAMPAIGNID
+                 const blockBtnId = `block_contact_camp_${campaignId}`;
+                 newChoices.push(`Bloquear Contato|${blockBtnId}`);
+            }
+
+            return { ...msg, choices: newChoices };
+        }
+        return msg;
+    });
+
+    // Create Campaign Document with processed template
+    const finalCampaignDoc = {
+      ...campaignDoc,
+      messageTemplate: processedTemplate
+    };
+
+    await newCampaignRef.set(finalCampaignDoc);
+    
     console.log(`[ManagedCampaign] Created campaign ${campaignId} with ${recipients.length} recipients.`);
 
     // Create Queue (Batch Write)

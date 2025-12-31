@@ -170,6 +170,7 @@ export default function ContactsPage() {
                 name: dataToSave.name || '',
                 phone: dataToSave.phone || '',
                 segment: dataToSave.segment || 'Active',
+                tags: dataToSave.tags || [],
                 createdAt: new Date(),
             };
 

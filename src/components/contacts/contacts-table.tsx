@@ -82,7 +82,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
                 }
             });
         }
-    }, [userId]);
+    }, [userId, importCounter]);
 
     const [isLoading, setIsLoading] = React.useState(true);
     const [isMigrating, setIsMigrating] = React.useState(false);
