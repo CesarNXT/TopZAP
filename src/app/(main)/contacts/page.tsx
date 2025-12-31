@@ -14,7 +14,7 @@ import { doc, setDoc, addDoc, collection, writeBatch, getDocs, query, where, get
 import { DeleteAllContactsDialog } from '@/components/contacts/delete-all-contacts-dialog';
 import { TagManagerDialog } from '@/components/contacts/tag-manager-dialog';
 
-// Função para formatar o número de telefone para o padrão de 12 dígitos (55+DDD+XXXXYYYY)
+// Função para formatar o número de telefone
 const formatPhoneNumberForDB = (phone: string | undefined | null): string => {
     if (!phone) return '';
     
@@ -34,21 +34,11 @@ const formatPhoneNumberForDB = (phone: string | undefined | null): string => {
         }
     }
     
-    // 3. Se for Brasil (começa com 55), aplica a regra de remover o 9º dígito extra
-    // Formato com 9º dígito: 55 (DDD: 2 dígitos) (9º: 1 dígito) (Número: 8 dígitos) -> Total 13 dígitos
-    if (cleaned.startsWith('55') && cleaned.length === 13) {
-        const ddd = cleaned.substring(2, 4);
-        const numberPart = cleaned.substring(4); // Pega a parte do número
-        
-        // Verifica se o nono dígito é realmente 9
-        if (numberPart.startsWith('9')) {
-             // Remove o primeiro '9' da parte do número para ficar com 8 dígitos
-             // Resultado: 55 + DDD + 8 dígitos = 12 dígitos
-             cleaned = '55' + ddd + numberPart.substring(1);
-        }
-    }
+    // User request: "remove o padrão é 12 digitos... remove esse kralho de 9"
+    // We REMOVED the logic that strips the 9th digit.
+    // We now accept the number EXACTLY as provided (after 55 check).
+    // If user provides 12 digits, we keep 12. If 13, we keep 13.
     
-    // O número final deve ter 12 dígitos para BR ou o tamanho original para outros países
     return cleaned;
 };
 

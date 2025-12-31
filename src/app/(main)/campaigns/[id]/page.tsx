@@ -116,7 +116,7 @@ export default function CampaignReportPage() {
         }
     }, [campaign?.stats?.sent, campaign?.stats?.delivered, campaign?.stats?.failed, uid, id]);
 
-    // Fetch interactions via Server Action (Bypass Security Rules)
+    // Live Refresh of Interactions (when stats change)
     useEffect(() => {
         if (!uid || !id) return;
         
@@ -124,13 +124,18 @@ export default function CampaignReportPage() {
              const result = await getCampaignInteractionsAction(uid!, id as string);
              if (result.success && result.data) {
                  setInteractions(result.data);
-             } else {
-                 console.warn("Failed to load interactions via server action:", result.error);
              }
         }
         
+        // Load initially
         loadInteractions();
-    }, [uid, id]);
+        
+        // Reload when stats change (e.g. new reply received via webhook)
+        if (campaign?.stats?.replied || campaign?.stats?.blocked) {
+             loadInteractions();
+        }
+
+    }, [uid, id, campaign?.stats?.replied, campaign?.stats?.blocked]);
 
     // Ensure campaign integrity (fix missing userId if needed)
     useEffect(() => {
@@ -358,7 +363,7 @@ export default function CampaignReportPage() {
     const deliveryRate = completedCount > 0 ? ((completedCount - countFailed) / completedCount) * 100 : 0;
 
     let verdict = { label: "Aguardando dados...", color: "text-gray-500", description: "Ainda não há dados suficientes para análise." };
-    if (completedCount > 10) {
+    if (completedCount > 0) {
         if (blockRate > 3) {
             verdict = { label: "Crítico", color: "text-red-600", description: "Taxa de bloqueio muito alta! Revise sua lista e conteúdo." };
         } else if (replyRate > 15) {
@@ -375,8 +380,9 @@ export default function CampaignReportPage() {
     const statusRaw = campaign.status || 'Draft';
     // Normalize status for display logic
     const status = statusRaw.charAt(0).toUpperCase() + statusRaw.slice(1).toLowerCase();
+    const isCompleted = status === 'Completed' || status === 'Done';
 
-    const displayStatus = (status === 'Completed' || status === 'Done') ? 'Concluído' : 
+    const displayStatus = isCompleted ? 'Concluído' : 
                           status === 'Paused' ? 'Pausado' : 
                           status === 'Stopped' ? 'Parada' :
                           status === 'Scheduled' ? 'Agendado' :
@@ -403,6 +409,10 @@ export default function CampaignReportPage() {
         if (s === 'failed') return 'Falhou';
         if (s === 'scheduled') return 'Agendado';
         if (s === 'sending') return 'Enviando';
+        if (s === 'pending') return 'Pendente';
+        if (s === 'completed') return 'Concluído';
+        if (s === 'paused') return 'Pausado';
+        if (s === 'queued') return 'Na Fila';
         return status;
     };
 
@@ -579,7 +589,13 @@ export default function CampaignReportPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {batchesList.map((batch: any) => (
+                                        {batchesList.map((batch: any) => {
+                                            const isBatchDone = (batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) || isCompleted;
+                                            
+                                            // Fallback progress: if campaign is completed, force 100% even if stats are missing
+                                            const progress = isBatchDone ? 100 : (batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0);
+                                            
+                                            return (
                                             <TableRow key={batch.id}>
                                                 <TableCell>{batch.name}</TableCell>
                                                 <TableCell>
@@ -594,28 +610,23 @@ export default function CampaignReportPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Badge variant="outline">
-                                                        {(batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) 
-                                                            ? 'Concluído' 
-                                                            : translateStatus(batch.status)}
+                                                    <Badge variant={isBatchDone ? "default" : "outline"} className={isBatchDone ? "bg-green-500 hover:bg-green-600" : ""}>
+                                                        {isBatchDone ? 'Concluído' : translateStatus(batch.status)}
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell>
                                                     <div className="flex items-center gap-2">
-                                                        <Progress value={
-                                                            batch.count > 0 ? 
-                                                            Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0
-                                                        } className="h-2 w-[60px]" />
+                                                        <Progress value={progress} className="h-2 w-[60px]" />
                                                         <span className="text-xs text-muted-foreground">
-                                                            {batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0}%
+                                                            {progress}%
                                                         </span>
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">
-                                                    {batch.stats?.sent || 0} env / {batch.stats?.delivered || 0} entr
+                                                    {batch.stats?.sent || (isBatchDone ? batch.count : 0)} env / {batch.stats?.delivered || 0} entr
                                                 </TableCell>
                                             </TableRow>
-                                        ))}
+                                        )})}
                                     </TableBody>
                                 </Table>
                             </CardContent>
@@ -655,13 +666,20 @@ export default function CampaignReportPage() {
                                                     {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString() : (campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : '-')}
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Badge className={
+                                                    <Badge 
+                                                        title={dispatch.status === 'failed' ? (dispatch.error || 'Erro desconhecido') : undefined}
+                                                        className={
                                                         dispatch.status === 'sent' || dispatch.status === 'delivered' || dispatch.status === 'read' ? 'bg-green-500 hover:bg-green-600' : 
-                                                        dispatch.status === 'failed' ? 'bg-red-500 hover:bg-red-600' : 
+                                                        dispatch.status === 'failed' ? 'bg-red-500 hover:bg-red-600 cursor-help' : 
                                                         'bg-slate-500 hover:bg-slate-600' // pending/scheduled
                                                     }>
                                                         {translateStatus(dispatch.status)}
                                                     </Badge>
+                                                    {dispatch.status === 'failed' && dispatch.error && (
+                                                        <div className="text-[10px] text-red-500 mt-1 max-w-[150px] truncate" title={dispatch.error}>
+                                                            {dispatch.error}
+                                                        </div>
+                                                    )}
                                                 </TableCell>
                                             </TableRow>
                                         ))

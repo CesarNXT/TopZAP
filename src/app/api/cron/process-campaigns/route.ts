@@ -234,8 +234,39 @@ export async function GET(request: Request) {
 
                         // Determine Endpoint
                         let endpoint = '/send/text';
-                        if (payload.type === 'button' || payload.choices || payload.imageButton) {
+                        
+                        // FIX: UAZAPI 'missing required fields in payload'
+                        // The docs say:
+                        // - 'type' is required for /send/menu (button|list|poll|carousel)
+                        // - 'choices' is required for buttons
+                        // - 'imageButton' is for buttons with image
+                        
+                        // We must ensure 'type' is set correctly for menu endpoint.
+                        if (payload.choices && payload.choices.length > 0) {
                             endpoint = '/send/menu';
+                            
+                            // If it has image/video + choices, UAZAPI documentation says:
+                            // "Para adicionar uma imagem aos botões, use o campo imageButton no payload"
+                            // BUT, the 'type' must be 'button'.
+                            // And 'imageButton' must be the URL.
+                            
+                            // If it was 'image' type in our system but has choices, convert to 'button' type with 'imageButton'
+                            if (payload.type === 'image' || payload.image) {
+                                payload.type = 'button';
+                                payload.imageButton = payload.image || payload.file || payload.url;
+                                // Clean up fields that might confuse API if both are present
+                                delete payload.image;
+                                delete payload.file; 
+                                delete payload.url;
+                            } else if (!payload.type || payload.type === 'text') {
+                                payload.type = 'button';
+                            }
+                            
+                            // FIX: 'message is nil' or 'missing required fields'
+                            // The 'text' field is MANDATORY for type='button' in UAZAPI, even if it has an image.
+                            if (!payload.text) {
+                                payload.text = ' '; // Use a space if no text is provided to prevent API error
+                            }
                         } else if (['image', 'video', 'document', 'audio', 'ptt', 'sticker'].includes(payload.type)) {
                             endpoint = '/send/media';
                         }
