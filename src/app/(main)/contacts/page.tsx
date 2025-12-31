@@ -150,7 +150,12 @@ export default function ContactsPage() {
     }
 
     const formattedPhone = formatPhoneNumberForDB(contactData.phone);
-    const dataToSave = { ...contactData, phone: formattedPhone };
+    const dataToSave: any = { ...contactData, phone: formattedPhone };
+    
+    // Ensure tags are preserved
+    if (contactData.tags) {
+        dataToSave.tags = contactData.tags;
+    }
 
     try {
         if (dataToSave.id) {

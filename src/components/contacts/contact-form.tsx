@@ -175,8 +175,14 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
         dataToSave.createdAt = serverTimestamp();
     }
     
+    // Explicitly ensure tags are included (even if empty)
+    if (!dataToSave.tags) {
+        dataToSave.tags = values.tags || [];
+    }
+
     onSave(dataToSave);
-    onOpenChange(false);
+    // Don't close immediately, let the parent handle success/close
+    // onOpenChange(false);
   }
 
   const title = contact ? 'Editar Contato' : 'Criar Novo Contato';

@@ -351,21 +351,6 @@ export function CreateCampaignWizard() {
             values.buttons = values.buttons.filter(b => b.text && b.text.trim() !== '');
         }
 
-        // Always add "Bloquear Contato" button if not present
-        // WhatsApp Button messages support up to 3 buttons.
-        if (!values.buttons) values.buttons = [];
-        
-        const hasBlockButton = values.buttons.some(b => b.text.toLowerCase().includes('bloquear') || b.id === 'block_contact');
-        
-        if (!hasBlockButton) {
-            // Ensure we don't exceed limit (if limit is 3, we might need to remove one or warn? For now just push)
-            // Assuming UI limits to 2 custom + 1 mandatory or similar.
-            values.buttons.push({
-                id: 'block_contact',
-                text: 'Bloquear Contato'
-            });
-        }
-
         // Prepare buttons as choices for UAZAPI
         const mapButtonsToChoices = (buttons: any[]) => {
             if (!buttons) return [];
@@ -428,12 +413,14 @@ export function CreateCampaignWizard() {
                         type: 'image'
                     });
 
-                    // Image always followed by text with buttons
-                    messagesToSend.push({
-                        text: values.message || "", 
-                        choices: choices,
-                        type: 'button'
-                    });
+                    // Image followed by text/buttons ONLY if they exist
+                    if (values.message || (choices && choices.length > 0)) {
+                        messagesToSend.push({
+                            text: values.message || "", 
+                            choices: choices,
+                            type: 'button'
+                        });
+                    }
                 } else if (values.media.type.startsWith('video/')) {
                      // Split into Video + Text/Buttons to ensure compatibility
                      messagesToSend.push({
@@ -442,12 +429,14 @@ export function CreateCampaignWizard() {
                         type: 'video'
                     });
                     
-                    // Video always followed by text with buttons
-                    messagesToSend.push({
-                        text: values.message || "Confira o vídeo acima:",
-                        choices: choices,
-                        type: 'button'
-                    });
+                    // Video followed by text/buttons ONLY if they exist
+                    if (values.message || (choices && choices.length > 0)) {
+                        messagesToSend.push({
+                            text: values.message || "Confira o vídeo acima:",
+                            choices: choices,
+                            type: 'button'
+                        });
+                    }
 
                 } else if (values.media.type.startsWith('audio/')) {
                     messagesToSend.push({
@@ -456,12 +445,14 @@ export function CreateCampaignWizard() {
                         ptt: true // Add ptt flag if needed, or rely on type 'audio'
                     });
                      
-                     // Audio always followed by text with buttons (mandatory block button)
-                     messagesToSend.push({
-                         text: values.message || "Selecione uma opção:",
-                         choices: choices,
-                         type: 'button'
-                     });
+                     // Audio followed by text/buttons ONLY if they exist
+                     if (values.message || (choices && choices.length > 0)) {
+                         messagesToSend.push({
+                             text: values.message || "Selecione uma opção:",
+                             choices: choices,
+                             type: 'button'
+                         });
+                     }
                 } else {
                     // Document or other
                     // Split Document + Text/Buttons
@@ -473,11 +464,13 @@ export function CreateCampaignWizard() {
                         type: 'document' 
                     });
 
-                     messagesToSend.push({
-                        text: values.message || "Segue o documento:",
-                        choices: choices,
-                        type: 'button'
-                    });
+                     if (values.message || (choices && choices.length > 0)) {
+                        messagesToSend.push({
+                            text: values.message || "Segue o documento:",
+                            choices: choices,
+                            type: 'button'
+                        });
+                     }
                 }
             } catch (e: any) {
                 console.error("File upload error", e);
@@ -500,12 +493,18 @@ export function CreateCampaignWizard() {
             }
         } else if (values.message) {
             // Text only
-            // Always has buttons now
-            messagesToSend.push({
-                text: values.message,
-                choices: choices,
-                type: 'button'
-            });
+            if (choices && choices.length > 0) {
+                 messagesToSend.push({
+                    text: values.message,
+                    choices: choices,
+                    type: 'button'
+                });
+            } else {
+                messagesToSend.push({
+                    text: values.message,
+                    type: 'text'
+                });
+            }
         }
 
         // Get active phones

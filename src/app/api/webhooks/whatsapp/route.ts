@@ -238,11 +238,13 @@ export async function POST(request: Request) {
 
                     const contactSnapshot = await contactsRef.where('phone', '==', phone).limit(1).get();
 
+                    let contactDocRef;
+
                     if (contactSnapshot.empty) {
                         const direction = fromMe ? "OUTGOING (I spoke)" : "INCOMING (They spoke)";
                         console.log(`[Webhook] New contact detected [${direction}]: ${phone}. Creating for UserID: ${userId}...`);
                         
-                        await contactsRef.add({
+                        contactDocRef = await contactsRef.add({
                             name: contactName,
                             phone: phone,
                             chatId: remoteJid,
@@ -258,6 +260,7 @@ export async function POST(request: Request) {
                     } else {
                         // Contact Exists - Update Activity AND Name if better name found
                         const contactDoc = contactSnapshot.docs[0];
+                        contactDocRef = contactDoc.ref;
                         const contactData = contactDoc.data();
                         
                         const updateData: any = { lastMessageAt: new Date().toISOString() };
@@ -373,13 +376,28 @@ export async function POST(request: Request) {
                                         
                                         // Determine Interaction Type
                                         const contentLower = (typeof msgContent === 'string' ? msgContent.toLowerCase() : '');
-                                        const isBlock = contentLower.startsWith('block_contact') || 
-                                                        contentLower.includes('bloquear') || 
-                                                        contentLower.includes('stop') ||
-                                                        contentLower.includes('parar');
+                                        
+                                        // STRICT BLOCK LOGIC: Only trigger if explicitly the Block Button (ID or Text)
+                                        // Removing generic "stop", "parar" etc to avoid accidental blocks from conversation.
+                                        const isBlock = contentLower === 'block_contact' || 
+                                                        contentLower === 'bloquear contato';
 
                                         const interactionType = isBlock ? 'block' : 'reply';
                                         const statusUpdate = isBlock ? 'blocked' : 'replied';
+                                        
+                                        // --- NEW: Global Contact Blocking Logic ---
+                                        if (isBlock && contactDocRef) {
+                                            try {
+                                                await contactDocRef.update({
+                                                    segment: 'Blocked',
+                                                    blockedAt: new Date().toISOString(),
+                                                    notes: `Blocked via Campaign Interaction (Msg: ${msgContent})`
+                                                });
+                                                console.log(`[Webhook] Contact ${phone} BLOCKED globally due to user request.`);
+                                            } catch (blockError) {
+                                                console.error(`[Webhook] Failed to block contact ${phone}:`, blockError);
+                                            }
+                                        }
 
                                         // 1. Update Queue Item
                                         await queueDocToUpdate.ref.update({
