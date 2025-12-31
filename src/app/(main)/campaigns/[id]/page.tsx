@@ -647,13 +647,14 @@ export default function CampaignReportPage() {
                                         <TableHead>Nome</TableHead>
                                         <TableHead>Telefone</TableHead>
                                         <TableHead>Agendado Para</TableHead>
+                                        <TableHead>Enviado Em</TableHead>
                                         <TableHead>Status</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {dispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={4} className="text-center py-4 text-muted-foreground">
+                                            <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
                                                 {loadingDispatches ? 'Carregando lista de envio...' : 'Nenhum registro encontrado (Campanha antiga ou vazia).'}
                                             </TableCell>
                                         </TableRow>
@@ -663,7 +664,10 @@ export default function CampaignReportPage() {
                                                 <TableCell className="font-medium">{dispatch.name || 'Sem nome'}</TableCell>
                                                 <TableCell>{dispatch.phone}</TableCell>
                                                 <TableCell>
-                                                    {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString() : (campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : '-')}
+                                                    {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : (campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-')}
+                                                </TableCell>
+                                                <TableCell>
+                                                    {dispatch.sentAt ? new Date(dispatch.sentAt).toLocaleString('pt-BR') : '-'}
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge 
