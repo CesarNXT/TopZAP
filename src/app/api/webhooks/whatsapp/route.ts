@@ -236,17 +236,26 @@ export async function POST(request: Request) {
                          }
                     }
 
-                    const contactSnapshot = await contactsRef.where('phone', '==', phone).limit(1).get();
+                    // Robust Phone Lookup (Try various formats)
+                    const possiblePhones = [phone, phone.replace(/^55/, ''), `55${phone}`];
+                    const uniquePhones = [...new Set(possiblePhones)];
+                    console.log(`[Webhook] Looking for contact with phones: ${JSON.stringify(uniquePhones)}`);
+                    
+                    let contactSnapshot;
+                    for (const p of uniquePhones) {
+                        contactSnapshot = await contactsRef.where('phone', '==', p).limit(1).get();
+                        if (!contactSnapshot.empty) break;
+                    }
 
                     let contactDocRef;
 
-                    if (contactSnapshot.empty) {
+                    if (!contactSnapshot || contactSnapshot.empty) {
                         const direction = fromMe ? "OUTGOING (I spoke)" : "INCOMING (They spoke)";
                         console.log(`[Webhook] New contact detected [${direction}]: ${phone}. Creating for UserID: ${userId}...`);
                         
                         contactDocRef = await contactsRef.add({
                             name: contactName,
-                            phone: phone,
+                            phone: phone, // Default to the incoming phone format if not found
                             chatId: remoteJid,
                             segment: 'Active',
                             userId: userId,
@@ -282,78 +291,73 @@ export async function POST(request: Request) {
                     // If the message is from the contact (not me), check if it's a reply to a recent campaign
                     if (!fromMe && userId) {
                         try {
-                            // Extract message content safely first
-                            console.log('[Webhook] Raw Message Object:', JSON.stringify(msg.message, null, 2));
+                            // AGGRESSIVE CONTENT EXTRACTION
+                            // Scan the message object for ANY known field that holds content/ID
+                            const getCandidateValues = (m: any): string[] => {
+                                const values: string[] = [];
+                                const safePush = (v: any) => { if (v && typeof v === 'string') values.push(v); };
 
-                            let msgContent = '';
-                            let buttonId = '';
-                            let buttonText = '';
-                            
-                            // 1. Buttons (High Priority)
-                            if (msg.message?.buttonsResponseMessage) {
-                                buttonId = msg.message.buttonsResponseMessage.selectedButtonId || '';
-                                buttonText = msg.message.buttonsResponseMessage.selectedDisplayText || '';
-                                msgContent = buttonId || buttonText;
-                            } else if (msg.message?.templateButtonReplyMessage) {
-                                buttonId = msg.message.templateButtonReplyMessage.selectedId || '';
-                                buttonText = msg.message.templateButtonReplyMessage.selectedDisplayText || '';
-                                msgContent = buttonId || buttonText;
-                            } else if (msg.message?.listResponseMessage) {
-                                buttonId = msg.message.listResponseMessage.singleSelectReply?.selectedRowId || '';
-                                buttonText = msg.message.listResponseMessage.title || '';
-                                msgContent = buttonId || buttonText;
-                            } 
-                            
-                            // 2. Text (Fallback)
-                            if (!msgContent) {
-                                    msgContent = msg.message?.conversation || 
-                                                msg.message?.extendedTextMessage?.text || 
-                                                (typeof msg.content === 'string' ? msg.content : '') || 
-                                                (msg.text?.body || msg.text || '');
-                            }
+                                // Standard & Interactive Paths
+                                const msgObj = m.message || {};
+                                safePush(msgObj.conversation);
+                                safePush(msgObj.extendedTextMessage?.text);
+                                safePush(msgObj.buttonsResponseMessage?.selectedButtonId);
+                                safePush(msgObj.buttonsResponseMessage?.selectedDisplayText);
+                                safePush(msgObj.templateButtonReplyMessage?.selectedId);
+                                safePush(msgObj.templateButtonReplyMessage?.selectedDisplayText);
+                                safePush(msgObj.listResponseMessage?.singleSelectReply?.selectedRowId);
+                                safePush(msgObj.listResponseMessage?.title);
+                                safePush(msgObj.interactive?.button_reply?.id);
+                                safePush(msgObj.interactive?.button_reply?.title);
+                                safePush(msgObj.interactive?.list_reply?.id);
+                                safePush(msgObj.interactive?.list_reply?.title);
 
-                            console.log(`[Webhook] Interaction Content: "${msgContent}" (ID: ${buttonId}, Text: ${buttonText}) from ${phone}`);
+                                // Root/Flat Paths (Provider variations)
+                                safePush(m.body);
+                                safePush(m.content);
+                                safePush(m.text?.body || m.text);
+                                safePush(m.selectedId);
+                                safePush(m.selectedRowId);
+                                safePush(m.selectedButtonId);
+                                
+                                // User Reported Specifics (UAZAPI / Native Flow)
+                                safePush(m.vote); // "vote": "Bloquear Contato"
+                                safePush(msgObj.vote);
 
-                            // Determine Interaction Type EARLY (for robust blocking)
-                            const contentLower = (typeof msgContent === 'string' ? msgContent.toLowerCase() : '');
-                            const buttonTextLower = buttonText.toLowerCase();
-                            
-                            // STRICT BLOCK LOGIC: Only trigger if explicitly the Block Button (ID or Text)
-                            const isBlock = contentLower === 'block_contact' || 
-                                            contentLower.includes('block_contact') || // ID might have suffixes
-                                            buttonTextLower === 'bloquear contato' ||
-                                            buttonTextLower === 'bloquear'; // Allow 'bloquear' if it's a BUTTON text
-
-                            // --- NEW: Global Contact Blocking Logic (Execute IMMEDIATELY) ---
-                            // We block even if we can't link to a campaign, or if they already replied.
-                            if (isBlock && contactDocRef) {
-                                try {
-                                    await contactDocRef.update({
-                                        segment: 'Blocked',
-                                        blockedAt: new Date().toISOString(),
-                                        notes: `Blocked via Campaign Interaction (Msg: ${msgContent})`
-                                    });
-                                    console.log(`[Webhook] Contact ${phone} BLOCKED globally due to user request.`);
-                                } catch (blockError) {
-                                    console.error(`[Webhook] Failed to block contact ${phone}:`, blockError);
+                                // Native Flow Message (NFM) Reply Parsing
+                                if (msgObj.interactive?.nfm_reply?.responseJson) {
+                                    try {
+                                        const nfmJson = JSON.parse(msgObj.interactive.nfm_reply.responseJson);
+                                        safePush(nfmJson.id);
+                                        safePush(nfmJson.name); // Sometimes the ID is in 'name' for NFM
+                                    } catch (e) {
+                                        console.log('[Webhook] Failed to parse NFM responseJson:', e);
+                                    }
                                 }
-                            }
 
+                                return values;
+                            };
+
+                            const contentCandidates = getCandidateValues(msg);
+                            const fullContentStr = contentCandidates.join(' || '); // Separator for logging
+                            const fullContentLower = fullContentStr.toLowerCase();
+
+                            console.log(`[Webhook] Interaction Scan for ${phone}: [${fullContentStr}]`);
+
+                            // 1. DETERMINE CAMPAIGN CONTEXT FIRST
                             // PRECISE TRACKING: Check for Campaign ID in button payload (ID preferred)
                             let targetCampaignId = null;
-                            const searchSource = buttonId || (typeof msgContent === 'string' ? msgContent : '');
+                            const campIdCandidate = contentCandidates.find(c => c.includes('_camp_'));
                             
-                            if (searchSource && searchSource.includes('_camp_')) {
-                                // Use split to safely get the LAST part, handling cases where the original ID might contain '_camp_'
-                                const parts = searchSource.split('_camp_');
+                            if (campIdCandidate) {
+                                const parts = campIdCandidate.split('_camp_');
                                 if (parts.length > 1) {
                                     // The last part is the campaign ID
                                     targetCampaignId = parts[parts.length - 1];
-                                    console.log(`[Webhook] PRECISE TRACKING: Found Campaign ID ${targetCampaignId} in button payload.`);
+                                    console.log(`[Webhook] PRECISE TRACKING: Found Campaign ID ${targetCampaignId} in payload.`);
                                 }
                             }
-
-                            // If precise tracking found, use it. Otherwise, use time window.
+                            
                             let campaignDocToUpdate = null;
                             let queueDocToUpdate = null;
 
@@ -362,11 +366,7 @@ export async function POST(request: Request) {
                                 const campRef = userDoc.ref.collection('campaigns').doc(targetCampaignId);
                                 const campSnap = await campRef.get();
                                 if (campSnap.exists) {
-                                    // User confirmed format is always 55... in DB and Webhook.
-                                    // We'll trust 'phone' first, but keep a simple fallback just in case.
-                                    const possiblePhones = [phone, phone.replace(/^55/, ''), `55${phone}`];
-                                    const uniquePhones = [...new Set(possiblePhones)];
-
+                                    // Try all phone variations for queue lookup
                                     for (const p of uniquePhones) {
                                         const snap = await campRef.collection('queue')
                                             .where('phone', '==', p)
@@ -379,6 +379,8 @@ export async function POST(request: Request) {
                                             break; 
                                         }
                                     }
+                                    // Even if queue item not found (maybe deleted?), we still have the campaign
+                                    if (!campaignDocToUpdate) campaignDocToUpdate = campSnap;
                                 }
                             } else {
                                 // Fallback: Text Response or Button without ID -> Check Recent Campaigns (Last 24h)
@@ -396,16 +398,24 @@ export async function POST(request: Request) {
                                 if (!recentCampaignsSnapshot.empty) {
                                     for (const campDoc of recentCampaignsSnapshot.docs) {
                                         // Check if this phone was in this campaign's queue
-                                        const queueSnapshot = await campDoc.ref.collection('queue')
-                                            .where('phone', '==', phone)
-                                            .where('status', '==', 'sent')
-                                            .where('sentAt', '>=', yesterdayIso)
-                                            .limit(1)
-                                            .get();
+                                        // Try all phone variations
+                                        let foundQueueDoc = null;
+                                        for (const p of uniquePhones) {
+                                            const queueSnapshot = await campDoc.ref.collection('queue')
+                                                .where('phone', '==', p)
+                                                .where('sentAt', '>=', yesterdayIso)
+                                                .limit(1)
+                                                .get();
+                                            
+                                            if (!queueSnapshot.empty) {
+                                                foundQueueDoc = queueSnapshot.docs[0];
+                                                break;
+                                            }
+                                        }
 
-                                        if (!queueSnapshot.empty) {
+                                        if (foundQueueDoc) {
                                             campaignDocToUpdate = campDoc;
-                                            queueDocToUpdate = queueSnapshot.docs[0];
+                                            queueDocToUpdate = foundQueueDoc;
                                             console.log(`[Webhook] Text/Generic Interaction linked to recent campaign: ${campDoc.id}`);
                                             break; // Stop at the most recent campaign found
                                         }
@@ -413,8 +423,62 @@ export async function POST(request: Request) {
                                 }
                             }
 
-                            if (campaignDocToUpdate && queueDocToUpdate) {
-                                const queueData = queueDocToUpdate.data();
+                            // 2. STRICT BLOCK LOGIC
+                            // User Request: ONLY block if it's a specific button click from our system.
+                            // DO NOT block on text "stop" or "bloquear".
+                            
+                            // Extract just the ID-like fields to be safe
+                            const msgObj = msg.message || {};
+                            const possibleIds = [
+                                msgObj.buttonsResponseMessage?.selectedButtonId,
+                                msgObj.templateButtonReplyMessage?.selectedId,
+                                msgObj.listResponseMessage?.singleSelectReply?.selectedRowId,
+                                msgObj.interactive?.button_reply?.id,
+                                msgObj.interactive?.list_reply?.id,
+                                msg.selectedId,
+                                msg.selectedRowId,
+                                msg.selectedButtonId
+                            ].filter(id => id && typeof id === 'string');
+
+                            // Check if ANY of the button IDs indicate a block action
+                            // Our block buttons ALWAYS have 'block' or 'bloquear' in the ID AND are constructed by us.
+                            const isBlock = possibleIds.some(id => 
+                                (id.toLowerCase().includes('block_contact') || id.toLowerCase().includes('bloquear')) &&
+                                id.includes('_camp_') // Ensure it's OUR button
+                            );
+
+                            if (isBlock) {
+                                console.log(`[Webhook] BLOCK ACTION DETECTED for ${phone}. Executing block...`);
+                                const blockNotes = `Blocked via Webhook (Campaign: ${campaignDocToUpdate?.id || 'unknown'}, Content: ${fullContentStr})`;
+                                
+                                if (contactDocRef) {
+                                    await contactDocRef.update({
+                                        segment: 'Blocked',
+                                        blockedAt: new Date().toISOString(),
+                                        notes: blockNotes,
+                                        blockedByCampaignId: campaignDocToUpdate?.id || null
+                                    });
+                                    console.log(`[Webhook] Contact ${phone} successfully marked as BLOCKED.`);
+                                } else {
+                                    console.error(`[Webhook] BLOCK FAILED: No contact reference found for ${phone}.`);
+                                    // Emergency fallback: try to find contact again by phone
+                                    const rescueSnapshot = await userDoc.ref.collection('contacts').where('phone', '==', phone).limit(1).get();
+                                    if (!rescueSnapshot.empty) {
+                                        await rescueSnapshot.docs[0].ref.update({
+                                            segment: 'Blocked',
+                                            blockedAt: new Date().toISOString(),
+                                            notes: blockNotes,
+                                            blockedByCampaignId: campaignDocToUpdate?.id || null
+                                        });
+                                        console.log(`[Webhook] Contact ${phone} BLOCKED via rescue lookup.`);
+                                    }
+                                }
+                            }
+
+                            // 3. CAMPAIGN INTERACTION UPDATE
+                            if (campaignDocToUpdate) {
+                                const queueData = queueDocToUpdate ? queueDocToUpdate.data() : {};
+                                const queueId = queueDocToUpdate ? queueDocToUpdate.id : 'unknown';
 
                                 // Only count if not already replied (unless we want to track all, but stats usually count unique replies)
                                 // EXCEPTION: If it is a BLOCK action, we allow overwriting 'replied' status to 'blocked', unless already blocked.
@@ -423,18 +487,17 @@ export async function POST(request: Request) {
 
                                         const timestamp = new Date().toISOString();
                                         
-                                        // 'isBlock' is already determined above.
                                         const interactionType = isBlock ? 'block' : 'reply';
                                         const statusUpdate = isBlock ? 'blocked' : 'replied';
                                         
-                                        // Global blocking logic is already executed above.
-
                                         // 1. Update Queue Item
-                                        await queueDocToUpdate.ref.update({
-                                            status: statusUpdate,
-                                            repliedAt: timestamp,
-                                            replyMessage: msgContent
-                                        });
+                                        if (queueDocToUpdate) {
+                                            await queueDocToUpdate.ref.update({
+                                                status: statusUpdate,
+                                                repliedAt: timestamp,
+                                                replyMessage: fullContentStr
+                                            });
+                                        }
 
                                         // 2. Add to Interactions Subcollection
                                         await campaignDocToUpdate.ref.collection('interactions').add({
@@ -442,8 +505,8 @@ export async function POST(request: Request) {
                                             phone: phone,
                                             name: queueData.name || contactName || phone,
                                             timestamp: timestamp,
-                                            message: msgContent,
-                                            queueId: queueDocToUpdate.id
+                                            message: fullContentStr,
+                                            queueId: queueId
                                         });
 
                                         // 3. Update Campaign Stats

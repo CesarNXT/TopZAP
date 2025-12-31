@@ -594,7 +594,11 @@ export default function CampaignReportPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Badge variant="outline">{translateStatus(batch.status)}</Badge>
+                                                    <Badge variant="outline">
+                                                        {(batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) 
+                                                            ? 'Concluído' 
+                                                            : translateStatus(batch.status)}
+                                                    </Badge>
                                                 </TableCell>
                                                 <TableCell>
                                                     <div className="flex items-center gap-2">
@@ -715,8 +719,8 @@ export default function CampaignReportPage() {
                                                         <span className="text-xs text-muted-foreground">{reply.phone}</span>
                                                     </div>
                                                 </TableCell>
-                                                <TableCell>{reply.content}</TableCell>
-                                                <TableCell>{new Date(reply.createdAt).toLocaleString()}</TableCell>
+                                                <TableCell>{reply.message || reply.content}</TableCell>
+                                                <TableCell>{new Date(reply.timestamp || reply.createdAt).toLocaleString()}</TableCell>
                                             </TableRow>
                                         ))
                                     )}
@@ -757,7 +761,7 @@ export default function CampaignReportPage() {
                                                         <span className="text-xs text-muted-foreground">{block.phone}</span>
                                                     </div>
                                                 </TableCell>
-                                                <TableCell>{new Date(block.createdAt).toLocaleString()}</TableCell>
+                                                <TableCell>{new Date(block.timestamp || block.createdAt).toLocaleString()}</TableCell>
                                                 <TableCell>
                                                     <Badge variant="destructive">Bloqueado</Badge>
                                                 </TableCell>

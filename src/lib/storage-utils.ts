@@ -20,7 +20,10 @@ export async function uploadFileToStorage(
             (snapshot) => {
                 // You can add progress tracking here if needed
                 const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                console.log('Upload is ' + progress + '% done');
+                // Only log every ~10% to avoid spamming console
+                if (progress % 10 < 1 || progress === 100) {
+                     console.log('Upload is ' + Math.floor(progress) + '% done');
+                }
             }, 
             (error) => {
                 // Handle unsuccessful uploads

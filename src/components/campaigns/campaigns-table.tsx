@@ -390,7 +390,8 @@ export function CampaignsTable() {
             if (isActiveA && !isActiveB) return -1;
             if (!isActiveA && isActiveB) return 1;
 
-            const getTime = (dateVal: any) => {
+            const getTime = (c: any) => {
+                const dateVal = c.createdAt || c.scheduledAt || c.sentDate;
                 if (!dateVal) return 0;
                 if (dateVal.toDate && typeof dateVal.toDate === 'function') {
                     return dateVal.toDate().getTime();
@@ -401,13 +402,11 @@ export function CampaignsTable() {
                 return new Date(dateVal).getTime();
             };
 
-            const dateA = getTime(a.sentDate);
-            const dateB = getTime(b.sentDate);
+            const dateA = getTime(a);
+            const dateB = getTime(b);
 
-            if (isActiveA && isActiveB) {
-                 return dateA - dateB;
-            }
-
+            // Secondary Sort: Date Descending (Newest First) for ALL
+            // "As velhas ficam no final" -> Oldest at bottom -> Descending
             return dateB - dateA;
         });
     }, [campaigns]);

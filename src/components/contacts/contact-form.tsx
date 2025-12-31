@@ -37,7 +37,7 @@ import { ddiList } from '@/lib/ddi-list';
 import { Check, Plus, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
-import { getTags } from '@/app/actions/tag-actions';
+import { getTags, createTag } from '@/app/actions/tag-actions';
 import { useUser } from '@/firebase';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -63,6 +63,7 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
   const { user } = useUser();
   const [availableTags, setAvailableTags] = React.useState<Tag[]>([]);
   const [isTagSelectorOpen, setIsTagSelectorOpen] = React.useState(false);
+  const [isCreatingTag, setIsCreatingTag] = React.useState(false);
 
   const [searchTerm, setSearchTerm] = React.useState('');
 
@@ -190,7 +191,34 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
     ? 'Atualize os detalhes do contato abaixo.'
     : 'Preencha os campos para adicionar um novo contato.';
 
+  const handleCreateTag = async () => {
+    if (!user || !searchTerm.trim()) return;
+    
+    setIsCreatingTag(true);
+    const colors = ['#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899'];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    
+    try {
+        const res = await createTag(user.uid, searchTerm.trim(), randomColor);
+        if (res.success && res.data) {
+            const newTag = res.data;
+            setAvailableTags(prev => [...prev, newTag]);
+            
+            // Auto-select the new tag
+            const currentTags = form.getValues('tags') || [];
+            form.setValue('tags', [...currentTags, newTag.id], { shouldDirty: true });
+            
+            setSearchTerm('');
+        }
+    } catch (error) {
+        console.error("Failed to create tag", error);
+    } finally {
+        setIsCreatingTag(false);
+    }
+  };
+
   return (
+    <>
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
@@ -345,79 +373,15 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
                               })}
                           </div>
                           
-                          <Popover open={isTagSelectorOpen} onOpenChange={setIsTagSelectorOpen}>
-                            <PopoverTrigger asChild>
-                              <Button 
-                                  type="button"
-                                  variant="outline" 
-                                  className="w-full justify-between text-muted-foreground font-normal"
-                              >
-                                  <span>Selecionar Etiquetas...</span>
-                                  <Plus className="h-4 w-4 opacity-50" />
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[350px] p-0" align="start">
-                                <div className="flex flex-col h-full">
-                                    <div className="px-3 py-2 border-b">
-                                        <h4 className="font-medium text-sm text-muted-foreground mb-2">Selecionar Etiquetas</h4>
-                                        <Input 
-                                            placeholder="Buscar etiqueta..." 
-                                            value={searchTerm}
-                                            onChange={(e) => setSearchTerm(e.target.value)}
-                                            className="h-8"
-                                        />
-                                    </div>
-                                    <ScrollArea className="h-[250px] p-2">
-                                        {filteredTags.length === 0 ? (
-                                            <div className="text-center text-muted-foreground py-4 text-sm">
-                                                Nenhuma etiqueta encontrada.
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-1">
-                                                {filteredTags.map(tag => {
-                                                    const isSelected = field.value?.includes(tag.id);
-                                                    return (
-                                                        <div 
-                                                            key={tag.id}
-                                                            className={cn(
-                                                                "flex items-center space-x-2 p-2 rounded-sm cursor-pointer hover:bg-muted transition-colors",
-                                                                isSelected && "bg-muted/50"
-                                                            )}
-                                                            onClick={(e) => {
-                                                                e.preventDefault();
-                                                                e.stopPropagation();
-                                                                const current = field.value || [];
-                                                                if (isSelected) {
-                                                                    field.onChange(current.filter(t => t !== tag.id));
-                                                                } else {
-                                                                    field.onChange([...current, tag.id]);
-                                                                }
-                                                            }}
-                                                        >
-                                                            <div 
-                                                                className={cn(
-                                                                    "flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
-                                                                    isSelected ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
-                                                                )}
-                                                            >
-                                                                <Check className={cn("h-3 w-3")} />
-                                                            </div>
-                                                            <div 
-                                                                className="w-3 h-3 rounded-full shrink-0" 
-                                                                style={{ backgroundColor: tag.color }} 
-                                                            />
-                                                            <span className="text-sm font-medium leading-none flex-1">
-                                                                {tag.name}
-                                                            </span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </ScrollArea>
-                                </div>
-                            </PopoverContent>
-                          </Popover>
+                          <Button 
+                              type="button"
+                              variant="outline" 
+                              className="w-full justify-between text-muted-foreground font-normal"
+                              onClick={() => setIsTagSelectorOpen(true)}
+                          >
+                              <span>Selecionar Etiquetas...</span>
+                              <Plus className="h-4 w-4 opacity-50" />
+                          </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -459,5 +423,94 @@ export function ContactForm({ isOpen, onOpenChange, contact, onSave }: ContactFo
             </Form>
         </DialogContent>
     </Dialog>
+
+    <Dialog open={isTagSelectorOpen} onOpenChange={setIsTagSelectorOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+                <DialogTitle>Gerenciar Etiquetas</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col h-full gap-4">
+                <div>
+                    <Input 
+                        placeholder="Buscar ou criar etiqueta..." 
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                </div>
+                <ScrollArea className="h-[300px] border rounded-md p-2">
+                    {filteredTags.length > 0 ? (
+                        <div className="space-y-1">
+                            {filteredTags.map(tag => {
+                                const currentTags = form.watch('tags') || [];
+                                const isSelected = currentTags.includes(tag.id);
+                                return (
+                                    <div 
+                                        key={tag.id}
+                                        className={cn(
+                                            "flex items-center space-x-2 p-2 rounded-sm cursor-pointer hover:bg-muted transition-colors",
+                                            isSelected && "bg-muted/50"
+                                        )}
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            if (isSelected) {
+                                                form.setValue('tags', currentTags.filter(t => t !== tag.id), { shouldDirty: true });
+                                            } else {
+                                                form.setValue('tags', [...currentTags, tag.id], { shouldDirty: true });
+                                            }
+                                        }}
+                                    >
+                                        <div 
+                                            className={cn(
+                                                "flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
+                                                isSelected ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
+                                            )}
+                                        >
+                                            <Check className={cn("h-3 w-3")} />
+                                        </div>
+                                        <div 
+                                            className="w-3 h-3 rounded-full shrink-0" 
+                                            style={{ backgroundColor: tag.color }} 
+                                        />
+                                        <span className="text-sm font-medium leading-none flex-1">
+                                            {tag.name}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="text-center text-muted-foreground py-2 text-sm">
+                            Nenhuma etiqueta encontrada.
+                        </div>
+                    )}
+                    
+                    {/* Create Option */}
+                    {searchTerm.trim().length > 0 && !availableTags.some(t => t.name.toLowerCase() === searchTerm.trim().toLowerCase()) && (
+                        <div className="pt-2 mt-2 border-t">
+                            <Button 
+                                variant="ghost" 
+                                className="w-full justify-start text-primary"
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    handleCreateTag();
+                                }}
+                                disabled={isCreatingTag}
+                            >
+                                <Plus className="mr-2 h-4 w-4" />
+                                {isCreatingTag ? 'Criando...' : `Criar "${searchTerm}"`}
+                            </Button>
+                        </div>
+                    )}
+                </ScrollArea>
+                <div className="flex justify-end">
+                    <Button onClick={() => setIsTagSelectorOpen(false)}>
+                        Concluído
+                    </Button>
+                </div>
+            </div>
+        </DialogContent>
+    </Dialog>
+    </>
   );
 }

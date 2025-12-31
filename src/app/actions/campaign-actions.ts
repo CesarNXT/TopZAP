@@ -180,63 +180,79 @@ export async function createManagedCampaign(input: CreateManagedCampaignInput) {
     const newCampaignRef = campaignsRef.doc();
     const campaignId = newCampaignRef.id;
 
-    // --- INJECT CAMPAIGN ID INTO BUTTONS ---
+    // --- INJECT CAMPAIGN ID & ENSURE BLOCK BUTTON ---
     // This ensures we can track exactly which campaign a button click came from.
-    const processedTemplate = messageTemplate.map((msg: any) => {
-        if (msg.choices && Array.isArray(msg.choices)) {
-            const newChoices = msg.choices.map((choice: string) => {
-                // Ignore section headers (for Lists)
+    // User Requirement: "Block Contact" button MUST be present on ALL messages (Text, Image, Video).
+    // For Audio (which doesn't support buttons), we append a separate options message.
+
+    const processedTemplate: any[] = [];
+
+    messageTemplate.forEach((msg: any) => {
+        const newMsg = { ...msg };
+        const type = newMsg.type || (newMsg.text ? 'text' : 'unknown');
+        
+        // Check if this message type supports attached buttons (Interactive Message)
+        // Note: 'image' and 'video' can become 'media menu'. 'text' becomes 'text menu'.
+        // 'audio'/'ptt' cannot have buttons attached directly.
+        const supportsButtons = ['text', 'image', 'video'].includes(type);
+
+        if (supportsButtons) {
+            // Ensure choices array exists
+            if (!newMsg.choices || !Array.isArray(newMsg.choices)) {
+                newMsg.choices = [];
+            }
+
+            // 1. Process existing choices (Inject Campaign ID)
+            newMsg.choices = newMsg.choices.map((choice: string) => {
+                // Ignore section headers
                 if (choice.trim().startsWith('[')) return choice;
 
                 let text = choice;
                 let id = choice;
-                let suffix = ''; // For description or other parts
+                let suffix = '';
 
                 if (choice.includes('|')) {
                     const parts = choice.split('|');
                     text = parts[0];
                     id = parts[1];
-                    // If there are more parts (e.g. description for list), keep them
-                    if (parts.length > 2) {
-                        suffix = '|' + parts.slice(2).join('|');
-                    }
+                    if (parts.length > 2) suffix = '|' + parts.slice(2).join('|');
                 }
 
-                // Check if it's a special button type that shouldn't have ID modified
-                // Special types usually have ID starting with specific prefixes
-                const isSpecial = id.startsWith('call:') || 
-                                  id.startsWith('copy:') || 
-                                  id.startsWith('url:') || 
-                                  id.startsWith('http:') || 
-                                  id.startsWith('https:');
-
-                if (!isSpecial) {
-                    // It's a Reply Button (or List Row). Inject Campaign ID.
-                    // New ID format: OriginalID_camp_CampaignID
-                    id = `${id}_camp_${campaignId}`;
+                const isSpecial = id.startsWith('call:') || id.startsWith('copy:') || id.startsWith('url:') || id.startsWith('http');
+                
+                if (!isSpecial && !id.includes(`_camp_${campaignId}`)) {
+                     id = `${id}_camp_${campaignId}`;
                 }
 
                 return `${text}|${id}${suffix}`;
             });
-            
-            // --- AUTOMATIC BLOCK BUTTON ADDITION ---
-            // If the user hasn't added a block button, we add one automatically.
-            // Check if there is already a button that looks like a block button (id contains 'block' or 'bloquear')
-            const hasBlockButton = newChoices.some((c: string) => {
+
+            // 2. Add "Bloquear Contato" button if missing
+            const hasBlockButton = newMsg.choices.some((c: string) => {
                  const id = c.split('|')[1] || '';
                  return id.toLowerCase().includes('block') || id.toLowerCase().includes('bloquear');
             });
 
-            if (!hasBlockButton && newChoices.length < 3) {
-                 // Add "Bloquear Contato" button
-                 // ID format: block_contact_camp_CAMPAIGNID
+            if (!hasBlockButton && newMsg.choices.length < 3) {
                  const blockBtnId = `block_contact_camp_${campaignId}`;
-                 newChoices.push(`Bloquear Contato|${blockBtnId}`);
+                 newMsg.choices.push(`Bloquear Contato|${blockBtnId}`);
             }
 
-            return { ...msg, choices: newChoices };
+            processedTemplate.push(newMsg);
+
+        } else {
+            // Message types that DO NOT support buttons (Audio, Sticker, etc.)
+            processedTemplate.push(newMsg);
+
+            // Force append a text message with Block button
+            // This satisfies "obrigatorio em todas as mensagens" for Audio/Sticker
+            const blockBtnId = `block_contact_camp_${campaignId}`;
+            processedTemplate.push({
+                type: 'text',
+                text: 'Opções:',
+                choices: [`Bloquear Contato|${blockBtnId}`]
+            });
         }
-        return msg;
     });
 
     // Create Campaign Document with processed template

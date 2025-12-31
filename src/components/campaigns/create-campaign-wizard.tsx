@@ -414,13 +414,13 @@ export function CreateCampaignWizard() {
                     });
 
                     // Image followed by text/buttons ONLY if they exist
-                    if (values.message || (choices && choices.length > 0)) {
-                        messagesToSend.push({
-                            text: values.message || "", 
-                            choices: choices,
-                            type: 'button'
-                        });
-                    }
+                    // FIX: Always send button message to ensure Block button is included
+                    messagesToSend.push({
+                        text: values.message || "Imagem recebida", 
+                        choices: choices || [],
+                        type: 'button'
+                    });
+
                 } else if (values.media.type.startsWith('video/')) {
                      // Split into Video + Text/Buttons to ensure compatibility
                      messagesToSend.push({
@@ -430,13 +430,12 @@ export function CreateCampaignWizard() {
                     });
                     
                     // Video followed by text/buttons ONLY if they exist
-                    if (values.message || (choices && choices.length > 0)) {
-                        messagesToSend.push({
-                            text: values.message || "Confira o vídeo acima:",
-                            choices: choices,
-                            type: 'button'
-                        });
-                    }
+                    // FIX: Always send button message to ensure Block button is included
+                    messagesToSend.push({
+                        text: values.message || "Confira o vídeo acima:",
+                        choices: choices || [],
+                        type: 'button'
+                    });
 
                 } else if (values.media.type.startsWith('audio/')) {
                     messagesToSend.push({
@@ -446,13 +445,13 @@ export function CreateCampaignWizard() {
                     });
                      
                      // Audio followed by text/buttons ONLY if they exist
-                     if (values.message || (choices && choices.length > 0)) {
-                         messagesToSend.push({
-                             text: values.message || "Selecione uma opção:",
-                             choices: choices,
-                             type: 'button'
-                         });
-                     }
+                     // FIX: Always send button message to ensure Block button is included
+                     messagesToSend.push({
+                         text: values.message || "Áudio recebido",
+                         choices: choices || [],
+                         type: 'button'
+                     });
+
                 } else {
                     // Document or other
                     // Split Document + Text/Buttons
@@ -464,13 +463,12 @@ export function CreateCampaignWizard() {
                         type: 'document' 
                     });
 
-                     if (values.message || (choices && choices.length > 0)) {
-                        messagesToSend.push({
-                            text: values.message || "Segue o documento:",
-                            choices: choices,
-                            type: 'button'
-                        });
-                     }
+                     // FIX: Always send button message to ensure Block button is included
+                    messagesToSend.push({
+                        text: values.message || "Segue o documento:",
+                        choices: choices || [],
+                        type: 'button'
+                    });
                 }
             } catch (e: any) {
                 console.error("File upload error", e);
@@ -493,18 +491,12 @@ export function CreateCampaignWizard() {
             }
         } else if (values.message) {
             // Text only
-            if (choices && choices.length > 0) {
-                 messagesToSend.push({
-                    text: values.message,
-                    choices: choices,
-                    type: 'button'
-                });
-            } else {
-                messagesToSend.push({
-                    text: values.message,
-                    type: 'text'
-                });
-            }
+            // FIX: Always use 'button' type to allow backend to inject Mandatory Block button
+            messagesToSend.push({
+                text: values.message,
+                choices: choices || [],
+                type: 'button'
+            });
         }
 
         // Get active phones
@@ -893,7 +885,7 @@ export function CreateCampaignWizard() {
                             )}
 
                              <FormField control={form.control} name="liabilityAccepted" render={({ field }) => (
-                                <FormItem className={cn("flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 transition-colors", submitError && !field.value ? "border-destructive ring-2 ring-destructive/50" : "")}>
+                                <FormItem className={cn("flex flex-row items-center space-x-3 space-y-0 rounded-md border p-4 transition-colors", submitError && !field.value ? "border-destructive ring-2 ring-destructive/50" : "")}>
                                     <FormControl>
                                         <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                                     </FormControl>
@@ -905,7 +897,7 @@ export function CreateCampaignWizard() {
                                         <FormMessage className='pt-2' />
                                     </div>
                                 </FormItem>
-                             )} />
+                            )} />
 
                         </CardContent>
                     </Card>
