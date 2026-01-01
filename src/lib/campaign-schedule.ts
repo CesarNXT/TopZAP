@@ -1,5 +1,88 @@
 
-import { addDays, format, parse, isSameDay, isAfter, isBefore, set } from 'date-fns';
+import { addDays, addMinutes, differenceInMilliseconds } from 'date-fns';
+
+// --- TIMEZONE HELPERS (BRASÍLIA HARDCODED) ---
+
+/**
+ * Returns the current date/time components in America/Sao_Paulo timezone.
+ * This is robust regardless of server timezone (UTC, etc).
+ */
+export function getBrasiliaComponents(date: Date) {
+    // Format: "MM/DD/YYYY, HH:mm:ss"
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: false
+    });
+    
+    const parts = fmt.formatToParts(date);
+    const getPart = (type: string) => parseInt(parts.find(p => p.type === type)?.value || '0');
+    
+    return {
+        year: getPart('year'),
+        month: getPart('month'), // 1-12
+        day: getPart('day'),
+        hour: getPart('hour'),
+        minute: getPart('minute'),
+        second: getPart('second')
+    };
+}
+
+/**
+ * Creates a UTC Date object corresponding to a specific time in Brasília.
+ * Example: Input (2024, 1, 1, 8, 0) -> Returns Timestamp for 2024-01-01 08:00 BRT
+ */
+export function createDateFromBrasilia(year: number, month: number, day: number, hour: number, minute: number): Date {
+    // We create a string in ISO format roughly, then force interpret as BRT? No, simpler:
+    // We construct a date string that Date.parse can handle with offset, OR we iterate.
+    // Easiest robust way without heavy libs:
+    // Create a UTC date with these components, then adjust by offset.
+    // BUT offset changes (DST).
+    // Better: Use the string constructor with explicit offset? No, BRT offset varies (-03 or -02).
+    // Best native way:
+    // 1. Guess UTC equivalent (Time + 3h)
+    // 2. Check what time that is in Brasilia.
+    // 3. Adjust diff.
+    
+    // Initial guess: Input is BRT. UTC is roughly Input + 3h.
+    const guess = new Date(Date.UTC(year, month - 1, day, hour + 3, minute));
+    
+    // Refine loop (usually 1-2 iterations)
+    for (let i = 0; i < 3; i++) {
+        const brt = getBrasiliaComponents(guess);
+        const diffHours = (brt.hour - hour);
+        const diffMinutes = (brt.minute - minute);
+        
+        // If match, return
+        if (diffHours === 0 && diffMinutes === 0) return guess;
+        
+        // Adjust guess
+        // If we are at 08:00 BRT but guess gave 09:00 BRT, we need to subtract 1h from guess.
+        // Watch out for day wrap (diffHours could be -23).
+        let totalDiffMin = (diffHours * 60) + diffMinutes;
+        
+        // Simple heuristic for day wrap
+        if (totalDiffMin > 720) totalDiffMin -= 1440;
+        if (totalDiffMin < -720) totalDiffMin += 1440;
+        
+        guess.setTime(guess.getTime() - (totalDiffMin * 60000));
+    }
+    return guess;
+}
+
+/**
+ * Adds minutes to a date, respecting Brasilia time continuity.
+ */
+function addMinutesBrasilia(date: Date, minutes: number): Date {
+    return new Date(date.getTime() + (minutes * 60000));
+}
+
+// ---------------------------------------------
 
 export interface WorkingHours {
     start: string; // "08:00"
@@ -29,6 +112,7 @@ export interface SpeedConfig {
 
 /**
  * Calculates the campaign schedule based on contacts, speed, and rules.
+ * FORCE BRASILIA TIMEZONE (UTC-3) logic.
  */
 export function calculateCampaignSchedule(
     totalContacts: number,
@@ -41,16 +125,25 @@ export function calculateCampaignSchedule(
     const avgDelaySeconds = (speedConfig.minDelay + speedConfig.maxDelay) / 2;
     
     let contactsRemaining = totalContacts;
-    let currentPointer = new Date(startDate);
     
-    // Safety break to prevent infinite loops
+    // Ensure start date is valid
+    let currentPointer = new Date(startDate);
+    const now = new Date();
+    if (currentPointer < now) currentPointer = now;
+
+    // Safety break
     let loops = 0;
-    const MAX_LOOPS = 365; // Max 1 year projection
+    const MAX_LOOPS = 365;
 
     while (contactsRemaining > 0 && loops < MAX_LOOPS) {
         loops++;
         
-        const dateStr = format(currentPointer, 'yyyy-MM-dd');
+        // Get Brasilia components for the current pointer
+        const brt = getBrasiliaComponents(currentPointer);
+        
+        // Format YYYY-MM-DD for rule lookup
+        const dateStr = `${brt.year}-${String(brt.month).padStart(2, '0')}-${String(brt.day).padStart(2, '0')}`;
+        
         const rule = rules.find(r => r.date === dateStr);
         
         // Determine window for this day
@@ -65,51 +158,61 @@ export function calculateCampaignSchedule(
         }
 
         if (!isActive) {
-            // Skip this day completely
-            currentPointer = addDays(currentPointer, 1);
-            currentPointer.setHours(0, 0, 0, 0);
+            // Skip this day completely. Move to next day 00:00 BRT.
+            // Create date for Tomorrow 00:00 BRT
+            // We use Date.UTC logic + 3h roughly, or our helper
+            // Simpler: Just add 24h and reset? No, DST issues.
+            // Use helper:
+            // Next day:
+            const nextDay = new Date(currentPointer);
+            nextDay.setDate(nextDay.getDate() + 1); // This shifts day in UTC, safe enough for "next day" intent usually
+            const nextBrt = getBrasiliaComponents(nextDay);
+            currentPointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
             continue;
         }
 
-        // Parse window boundaries for this specific date
-        const windowStart = parse(`${dateStr} ${startStr}`, 'yyyy-MM-dd HH:mm', new Date());
-        const windowEnd = parse(`${dateStr} ${endStr}`, 'yyyy-MM-dd HH:mm', new Date());
+        // Parse window boundaries for this specific date in BRT
+        const [startH, startM] = startStr.split(':').map(Number);
+        const [endH, endM] = endStr.split(':').map(Number);
+        
+        const windowStart = createDateFromBrasilia(brt.year, brt.month, brt.day, startH, startM);
+        const windowEnd = createDateFromBrasilia(brt.year, brt.month, brt.day, endH, endM);
 
         // Adjust currentPointer if it's before the window start
-        if (isBefore(currentPointer, windowStart)) {
+        if (currentPointer < windowStart) {
             currentPointer = windowStart;
         }
 
         // If currentPointer is already past window end, move to next day
-        if (isAfter(currentPointer, windowEnd)) {
-            currentPointer = addDays(currentPointer, 1);
-            currentPointer.setHours(0, 0, 0, 0); // Will be adjusted in next iteration
+        if (currentPointer > windowEnd) {
+            const nextDay = new Date(currentPointer);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextBrt = getBrasiliaComponents(nextDay);
+            currentPointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
             continue;
         }
 
         // Calculate available time in this window
-        // Available seconds = (WindowEnd - CurrentPointer) / 1000
         const availableSeconds = (windowEnd.getTime() - currentPointer.getTime()) / 1000;
         
         if (availableSeconds <= 0) {
-             currentPointer = addDays(currentPointer, 1);
-             currentPointer.setHours(0, 0, 0, 0);
-             continue;
+            const nextDay = new Date(currentPointer);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextBrt = getBrasiliaComponents(nextDay);
+            currentPointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
+            continue;
         }
 
         // Calculate how many contacts fit
-        // Each contact takes avgDelaySeconds
         const capacity = Math.floor(availableSeconds / avgDelaySeconds);
-        
-        // Take the minimum of capacity or remaining
         const countForBatch = Math.min(capacity, contactsRemaining);
         
-        // If count is 0 (e.g. less than one message time remaining), move to next day? 
-        // Or if it fits at least one?
         if (countForBatch <= 0) {
-             currentPointer = addDays(currentPointer, 1);
-             currentPointer.setHours(0, 0, 0, 0);
-             continue;
+            const nextDay = new Date(currentPointer);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextBrt = getBrasiliaComponents(nextDay);
+            currentPointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
+            continue;
         }
 
         // Calculate actual end time for this batch
@@ -118,7 +221,7 @@ export function calculateCampaignSchedule(
 
         batches.push({
             id: dateStr,
-            date: currentPointer, // This is the start time of the batch
+            date: currentPointer, 
             startTime: currentPointer,
             endTime: batchEndTime,
             count: countForBatch,
@@ -127,12 +230,11 @@ export function calculateCampaignSchedule(
 
         contactsRemaining -= countForBatch;
         
-        // Prepare for next loop:
-        // If we exhausted the contacts, we are done.
-        // If not, it means we hit the window limit.
-        // So start next batch at start of next day (which will be handled by logic at top of loop)
-        currentPointer = addDays(currentPointer, 1);
-        currentPointer.setHours(0, 0, 0, 0);
+        // Prepare for next loop (start where we left off)
+        currentPointer = batchEndTime;
+        
+        // Small buffer to prevent stuck at boundary?
+        // If we filled the window exactly, next loop will detect "past window end" and move day.
     }
 
     return batches;
@@ -141,6 +243,7 @@ export function calculateCampaignSchedule(
 /**
  * Helper to find the next valid execution time given the rules.
  * Used by the backend worker to schedule individual messages.
+ * NOW FORCE BRASILIA TIME.
  */
 export function getNextValidTime(
     proposedTime: Date,
@@ -151,9 +254,15 @@ export function getNextValidTime(
     let loops = 0;
     const MAX_LOOPS = 365;
 
+    // Ensure we don't return a time in the past relative to "now"
+    // But this function is often called with "future" pointer.
+    
     while (loops < MAX_LOOPS) {
         loops++;
-        const dateStr = format(pointer, 'yyyy-MM-dd');
+        
+        const brt = getBrasiliaComponents(pointer);
+        const dateStr = `${brt.year}-${String(brt.month).padStart(2, '0')}-${String(brt.day).padStart(2, '0')}`;
+        
         const rule = rules.find(r => r.date === dateStr);
 
         let startStr = defaultWorkingHours?.start || "00:00";
@@ -167,30 +276,36 @@ export function getNextValidTime(
         }
 
         if (!isActive) {
-            // Day is skipped, move to next day 00:00
-            pointer = addDays(pointer, 1);
-            pointer.setHours(0, 0, 0, 0);
+            // Day is skipped, move to next day 00:00 BRT
+            const nextDay = new Date(pointer);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextBrt = getBrasiliaComponents(nextDay);
+            pointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
             continue;
         }
 
-        const windowStart = parse(`${dateStr} ${startStr}`, 'yyyy-MM-dd HH:mm', new Date());
-        const windowEnd = parse(`${dateStr} ${endStr}`, 'yyyy-MM-dd HH:mm', new Date());
+        const [startH, startM] = startStr.split(':').map(Number);
+        const [endH, endM] = endStr.split(':').map(Number);
+        
+        const windowStart = createDateFromBrasilia(brt.year, brt.month, brt.day, startH, startM);
+        const windowEnd = createDateFromBrasilia(brt.year, brt.month, brt.day, endH, endM);
 
         // Case 1: Before window
-        if (isBefore(pointer, windowStart)) {
+        if (pointer < windowStart) {
             return windowStart;
         }
 
         // Case 2: Inside window
-        if (pointer.getTime() <= windowEnd.getTime()) {
+        if (pointer <= windowEnd) {
             return pointer;
         }
 
-        // Case 3: After window
-        // Move to next day
-        pointer = addDays(pointer, 1);
-        pointer.setHours(0, 0, 0, 0);
+        // Case 3: After window -> Move to next day
+        const nextDay = new Date(pointer);
+        nextDay.setDate(nextDay.getDate() + 1);
+        const nextBrt = getBrasiliaComponents(nextDay);
+        pointer = createDateFromBrasilia(nextBrt.year, nextBrt.month, nextBrt.day, 0, 0);
     }
     
-    return pointer; // Should not reach here typically
+    return pointer;
 }

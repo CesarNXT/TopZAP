@@ -174,7 +174,12 @@ export function CreateCampaignWizard() {
             sendSpeed: 'slow',
             liabilityAccepted: false,
             startDate: format(new Date(), 'yyyy-MM-dd'),
-            startHour: "08:00",
+            startHour: (() => {
+                const now = new Date();
+                // Set to 5 minutes in the future to allow time for creation
+                const targetTime = new Date(now.getTime() + 5 * 60 * 1000);
+                return format(targetTime, 'HH:mm');
+            })(),
             endHour: "18:00",
         },
     });

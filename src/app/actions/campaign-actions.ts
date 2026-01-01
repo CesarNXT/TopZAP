@@ -529,24 +529,39 @@ export async function generateCampaignBatchesAction(userId: string, campaignId: 
 
         const batches: Record<string, any> = {};
 
+        // 1. Group items by date to ensure correct ordering
+        const itemsByDate: Record<string, any[]> = {};
+        
         queueSnapshot.docs.forEach(doc => {
             const item = doc.data();
             if (item.scheduledAt) {
                 const dateKey = new Date(item.scheduledAt).toISOString().split('T')[0];
+                if (!itemsByDate[dateKey]) itemsByDate[dateKey] = [];
+                itemsByDate[dateKey].push(item);
+            }
+        });
+
+        // 2. Sort dates chronologically
+        const sortedDates = Object.keys(itemsByDate).sort();
+
+        // 3. Create batches in order
+        sortedDates.forEach((dateKey, index) => {
+            const items = itemsByDate[dateKey];
+            
+            // Initialize batch
+            batches[dateKey] = {
+                id: dateKey,
+                name: `Lote ${index + 1}`,
+                scheduledAt: items[0].scheduledAt, // Init start
+                endTime: items[0].scheduledAt,     // Init end
+                count: 0,
+                status: 'pending',
+                stats: { sent: 0, delivered: 0, failed: 0 }
+            };
+
+            items.forEach(item => {
                 const itemTime = new Date(item.scheduledAt).getTime();
-
-                if (!batches[dateKey]) {
-                    batches[dateKey] = {
-                        id: dateKey,
-                        name: `Lote ${Object.keys(batches).length + 1}`,
-                        scheduledAt: item.scheduledAt, // Init start
-                        endTime: item.scheduledAt,     // Init end
-                        count: 0,
-                        status: 'pending',
-                        stats: { sent: 0, delivered: 0, failed: 0 }
-                    };
-                }
-
+                
                 // Update start/end times
                 const currentStart = new Date(batches[dateKey].scheduledAt).getTime();
                 const currentEnd = batches[dateKey].endTime ? new Date(batches[dateKey].endTime).getTime() : currentStart;
@@ -564,7 +579,7 @@ export async function generateCampaignBatchesAction(userId: string, campaignId: 
                 if (item.status === 'sent') batches[dateKey].stats.sent++;
                 if (item.status === 'delivered') batches[dateKey].stats.delivered++;
                 if (item.status === 'failed') batches[dateKey].stats.failed++;
-            }
+            });
         });
 
         await campaignRef.update({ batches });

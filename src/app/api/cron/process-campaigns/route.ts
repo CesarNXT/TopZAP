@@ -162,9 +162,9 @@ export async function GET(request: Request) {
 
                 // RANDOMIZATION: Add jitter to execution time to avoid "robotic" :00 sends.
                 // User requested "randomness" like 01:21, 02:01, etc.
-                // Since Cron triggers at :00, we sleep a random amount (e.g., 5s to 50s)
+                // Since Cron triggers at :00, we sleep a random amount (e.g., 5s to 30s)
                 // This makes the send time vary wildly within the minute.
-                const randomJitter = Math.floor(Math.random() * 45000) + 5000; // 5s to 50s
+                const randomJitter = Math.floor(Math.random() * 25000) + 5000; // 5s to 30s
                 await new Promise(r => setTimeout(r, randomJitter));
 
                 const BATCH_SIZE = 1; // Strict 1 msg/min

@@ -7,11 +7,12 @@ import { doc, onSnapshot, collection, query, orderBy, updateDoc, limit, getDocs,
 import { Campaign } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, MessageSquare, ShieldAlert, CheckCircle2, Users, Play, Pause, Trash2, RefreshCw, Square, Loader2 } from 'lucide-react';
+import { ArrowLeft, MessageSquare, ShieldAlert, CheckCircle2, Users, Play, Pause, Trash2, RefreshCw, Square, Loader2, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { getCampaignMessagesFromProvider, getCampaignsFromProvider, controlCampaign } from '@/app/actions/whatsapp-actions';
 import { deleteCampaignAction, getCampaignInteractionsAction, getCampaignDispatchesAction, ensureCampaignOwnership, generateCampaignBatchesAction } from '@/app/actions/campaign-actions';
+import { fixCampaignTimezoneAction } from '@/app/actions/campaign-fix-actions';
 import { useToast } from '@/hooks/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -96,25 +97,67 @@ export default function CampaignReportPage() {
         }
     }, [uid, id, lastDispatchDoc]);
 
-    // Initial Load of Dispatches
+    // Initial Load of Dispatches - DISABLED (Handled by Realtime Listener below)
+    /*
     useEffect(() => {
         if (uid && id) {
             loadDispatches(true);
         }
-    }, [uid, id]); // Run once when ID/User changes
+    }, [uid, id]); 
+    */
 
-    // Live Refresh of Dispatches when stats change (and user is on first page)
+    // Realtime Dispatches Listener (Optimized for Cost)
+    // Replaces polling/re-fetching. Costs 1 read per change instead of 50 reads per change.
+    useEffect(() => {
+        if (!uid || !id || !firestore) return;
+
+        // Determine collection name based on campaign type or fallback
+        // We can't easily know 'managed' vs 'legacy' before campaign loads, 
+        // but we can try 'queue' first as it's the new standard.
+        const collectionName = campaign?.type === 'managed' ? 'queue' : 'dispatches';
+        
+        // Only set up listener if we are on the first page to save resources
+        // If user scrolls down, we fallback to manual pagination (loadDispatches)
+        if (dispatches.length > 50 && !loadingDispatches) return;
+
+        const q = query(
+            collection(firestore, 'users', uid, 'campaigns', id as string, collectionName),
+            orderBy('scheduledAt', 'asc'),
+            limit(50)
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // Merge with existing dispatches if we have more than 50 (pagination)
+            // But for the "Head" (first 50), we keep them realtime.
+            setDispatches(prev => {
+                if (prev.length <= 50) return items;
+                // If we have more, replace the first 50 and keep the rest
+                // This might be tricky if sort order changes, but for 'scheduledAt' it's stable-ish.
+                // Simpler: Just update the view for the first 50.
+                return [...items, ...prev.slice(50)];
+            });
+            
+            setLastDispatchDoc(snapshot.docs[snapshot.docs.length - 1]);
+            setLoadingDispatches(false);
+        }, (error) => {
+            console.error("Error in dispatches listener:", error);
+        });
+
+        return () => unsubscribe();
+    }, [uid, id, firestore, campaign?.type]);
+
+    /* REMOVED: Inefficient Polling
     useEffect(() => {
         if (uid && id && campaign?.stats && dispatches.length <= 50) {
-            // Debounce or just call it? Since stats don't change continuously at high rate (except massive campaigns),
-            // and we want "instant" feel, let's call it.
-            // Using a small timeout to ensure Firestore has consistency if the stats update slightly before the collection query
             const timer = setTimeout(() => {
                 loadDispatches(true, true);
             }, 1000); 
             return () => clearTimeout(timer);
         }
     }, [campaign?.stats?.sent, campaign?.stats?.delivered, campaign?.stats?.failed, uid, id]);
+    */
 
     // Live Refresh of Interactions (when stats change)
     useEffect(() => {
@@ -294,6 +337,33 @@ export default function CampaignReportPage() {
             refreshData();
         } else {
             toast({ variant: "destructive", title: "Erro na ação", description: result.error });
+        }
+    };
+
+    const handleFixTimezone = async () => {
+        if (!uid || !id) return;
+        setIsControlling(true);
+        
+        // 1. Fix Timezone
+        const resultTimezone = await fixCampaignTimezoneAction(uid, id as string);
+        
+        // 2. Regenerate Batches (Fix "Lote 1, Lote 2" order)
+        const resultBatches = await generateCampaignBatchesAction(uid, id as string);
+
+        setIsControlling(false);
+        
+        if (resultTimezone.success && resultBatches.success) {
+            toast({ 
+                title: "Correção Concluída", 
+                description: `Fuso horário ajustado (${resultTimezone.count || 0} itens) e Lotes reorganizados.` 
+            });
+            refreshData();
+        } else {
+            toast({ 
+                variant: "destructive", 
+                title: "Erro na Correção", 
+                description: resultTimezone.error || resultBatches.error 
+            });
         }
     };
 
@@ -622,8 +692,19 @@ export default function CampaignReportPage() {
                                                         </span>
                                                     </div>
                                                 </TableCell>
-                                                <TableCell className="text-xs text-muted-foreground">
-                                                    {batch.stats?.sent || (isBatchDone ? batch.count : 0)} env / {batch.stats?.delivered || 0} entr
+                                                <TableCell>
+                                                    <div className="flex flex-col text-xs">
+                                                        <span className="font-semibold text-gray-700 dark:text-gray-300">Total: {batch.count}</span>
+                                                        <div className="flex items-center gap-2 mt-1">
+                                                             <span className="text-green-600 font-medium" title="Enviados">
+                                                                 {batch.stats?.sent || (isBatchDone ? Math.max(0, batch.count - (batch.stats?.failed || 0)) : 0)} env
+                                                             </span>
+                                                             <span className="text-gray-300">|</span>
+                                                             <span className="text-red-500 font-medium" title="Falhas">
+                                                                 {batch.stats?.failed || 0} falha
+                                                             </span>
+                                                        </div>
+                                                    </div>
                                                 </TableCell>
                                             </TableRow>
                                         )})}
@@ -681,7 +762,7 @@ export default function CampaignReportPage() {
                                                     </Badge>
                                                     {dispatch.status === 'failed' && dispatch.error && (
                                                         <div className="text-[10px] text-red-500 mt-1 max-w-[150px] truncate" title={dispatch.error}>
-                                                            {dispatch.error}
+                                                            Número sem WhatsApp
                                                         </div>
                                                     )}
                                                 </TableCell>
