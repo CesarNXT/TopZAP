@@ -3,7 +3,7 @@ export type Contact = {
   userId: string;
   name: string;
   phone: string;
-  segment: 'Active' | 'Blocked';
+  segment: 'Active' | 'Blocked' | 'Regular' | 'Inactive' | 'New';
   createdAt: any; // Can be string or Firestore Timestamp
   avatarUrl?: string;
   birthday?: string;

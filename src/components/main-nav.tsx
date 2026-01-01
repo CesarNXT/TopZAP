@@ -6,6 +6,7 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  useSidebar,
 } from '@/components/ui/sidebar';
 import {
   LayoutDashboard,
@@ -54,6 +55,14 @@ const secondaryNavItems = [
 
 export function MainNav() {
   const pathname = usePathname();
+  const { isMobile, setOpenMobile } = useSidebar();
+
+  const handleMobileClick = () => {
+    // Close sidebar on mobile when a link is clicked
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
 
   return (
     <>
@@ -65,7 +74,7 @@ export function MainNav() {
             isActive={pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))}
             tooltip={item.label}
           >
-            <Link href={item.href}>
+            <Link href={item.href} onClick={handleMobileClick}>
               <item.icon />
               <span>{item.label}</span>
             </Link>
@@ -82,7 +91,7 @@ export function MainNav() {
                 isActive={pathname === item.href}
                 tooltip={item.label}
             >
-                <Link href={item.href}>
+                <Link href={item.href} onClick={handleMobileClick}>
                     <item.icon />
                     <span>{item.label}</span>
                 </Link>

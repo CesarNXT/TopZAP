@@ -319,38 +319,38 @@ export default function ContactsPage() {
   };
 
   return (
-    <div className="container">
-      <PageHeader>
+    <div className="w-full p-2 md:container md:py-6">
+      <PageHeader className="mb-4">
         <div className='flex-1'>
-          <PageHeaderHeading>Gerenciamento de Contatos</PageHeaderHeading>
-          <PageHeaderDescription>
+          <PageHeaderHeading className="text-xl md:text-2xl">Gerenciamento de Contatos</PageHeaderHeading>
+          <PageHeaderDescription className="text-sm md:text-base">
             Organize e agrupe seus contatos para mensagens direcionadas.
           </PageHeaderDescription>
         </div>
-        <PageHeaderActions>
+        <PageHeaderActions className="flex-wrap gap-2">
             <Button variant="outline" size="icon" onClick={handleRefresh} title="Atualizar Lista">
                 <RefreshCw className="h-4 w-4" />
             </Button>
-            <Button variant="destructive" onClick={() => setIsDeleteAllOpen(true)}>
+            <Button variant="destructive" size="sm" onClick={() => setIsDeleteAllOpen(true)} className="flex-1 md:flex-none">
                 <Trash2 className="mr-2 h-4 w-4" />
                 Excluir Todos
             </Button>
-            <Button variant="outline" onClick={() => setIsTagManagerOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setIsTagManagerOpen(true)} className="flex-1 md:flex-none">
                 <Tag className="mr-2 h-4 w-4" />
                 Etiquetas
             </Button>
-            <Button variant="outline" onClick={() => setIsImportWizardOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setIsImportWizardOpen(true)} className="flex-1 md:flex-none">
                 <Upload className="mr-2 h-4 w-4" />
                 Importar CSV
             </Button>
-            <Button onClick={handleNewRequest}>
+            <Button size="sm" onClick={handleNewRequest} className="flex-1 md:flex-none w-full md:w-auto">
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Novo Contato
             </Button>
         </PageHeaderActions>
       </PageHeader>
       
-      <div className="grid gap-4 md:grid-cols-3 mb-6">
+      <div className="grid gap-3 grid-cols-1 md:grid-cols-3 mb-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">

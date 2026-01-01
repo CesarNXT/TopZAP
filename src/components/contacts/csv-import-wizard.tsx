@@ -337,7 +337,7 @@ export function CsvImportWizard({ isOpen, onOpenChange, onImport }: CsvImportWiz
                     <AlertTriangle className="h-4 w-4" />
                     <AlertTitle>Contatos Inválidos</AlertTitle>
                     <AlertDescription>
-                        Foram ignorados <strong>{invalidContacts.length} contatos</strong>. Verifique a aba "Inválidos" abaixo para detalhes.
+                        Foram ignorados <strong>{invalidContacts.length} contatos</strong>. Verifique a aba &quot;Inválidos&quot; abaixo para detalhes.
                     </AlertDescription>
                 </Alert>
             )}

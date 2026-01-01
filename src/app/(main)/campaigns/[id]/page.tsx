@@ -41,8 +41,12 @@ export default function CampaignReportPage() {
     const [dispatches, setDispatches] = useState<any[]>([]);
     const [loadingDispatches, setLoadingDispatches] = useState(false);
     const [hasMoreDispatches, setHasMoreDispatches] = useState(true);
-    const [lastDispatchDoc, setLastDispatchDoc] = useState<any>(null);
+    const [lastDispatchScheduledAt, setLastDispatchScheduledAt] = useState<string | null>(null);
     const [generatingBatches, setGeneratingBatches] = useState(false);
+    
+    // Batch Filtering State
+    const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState("batches");
 
     const uid = user?.uid;
 
@@ -58,53 +62,14 @@ export default function CampaignReportPage() {
         }
     };
 
-    // Load Dispatches (Detailed List)
-    const loadDispatches = useCallback(async (isInitial = false, silent = false) => {
-        if (!uid || !id) return;
-        
-        if (isInitial) {
-            if (!silent) setLoadingDispatches(true);
-            // We don't clear dispatches immediately if silent, to avoid flicker
-            if (!silent) setDispatches([]);
-            setLastDispatchDoc(null);
-            setHasMoreDispatches(true);
-        } else {
-            setLoadingDispatches(true);
-        }
 
-        try {
-            const startAfterPhone = !isInitial && lastDispatchDoc ? String(lastDispatchDoc) : undefined;
-            const result = await getCampaignDispatchesAction(uid!, id as string, 50, startAfterPhone);
-            
-            if (result.success && Array.isArray(result.data)) {
-                const newDispatches = result.data;
-                setDispatches(prev => isInitial ? newDispatches : [...prev, ...newDispatches]);
-                setLastDispatchDoc(result.lastPhone || null);
-                setHasMoreDispatches(!!result.hasMore);
-            } else {
-                setHasMoreDispatches(false);
-                if (isInitial && !silent) {
-                    console.log("Dispatches collection might not exist for this campaign yet.");
-                }
-            }
-        } catch (error) {
-            console.error("Error loading dispatches:", error);
-            if (isInitial && !silent) {
-                console.log("Dispatches collection might not exist for this campaign yet.");
-            }
-        } finally {
-            if (!silent) setLoadingDispatches(false);
-        }
-    }, [uid, id, lastDispatchDoc]);
-
-    // Initial Load of Dispatches - DISABLED (Handled by Realtime Listener below)
-    /*
+    // Reset dispatches when filter changes
     useEffect(() => {
-        if (uid && id) {
-            loadDispatches(true);
-        }
-    }, [uid, id]); 
-    */
+        setDispatches([]);
+        setLastDispatchScheduledAt(null);
+        setHasMoreDispatches(true);
+        setLoadingDispatches(true);
+    }, [selectedBatchId]);
 
     // Realtime Dispatches Listener (Optimized for Cost)
     // Replaces polling/re-fetching. Costs 1 read per change instead of 50 reads per change.
@@ -118,13 +83,26 @@ export default function CampaignReportPage() {
         
         // Only set up listener if we are on the first page to save resources
         // If user scrolls down, we fallback to manual pagination (loadDispatches)
-        if (dispatches.length > 50 && !loadingDispatches) return;
+        // If filtering by batch, we always listen to the filtered set
+        if (dispatches.length > 50 && !loadingDispatches && !selectedBatchId) return;
 
-        const q = query(
+        let q = query(
             collection(firestore, 'users', uid, 'campaigns', id as string, collectionName),
-            orderBy('scheduledAt', 'asc'),
-            limit(50)
+            orderBy('scheduledAt', 'asc')
         );
+
+        if (selectedBatchId) {
+             // Derive range from selectedBatchId (YYYY-MM-DD) to avoid dependency on changing campaign.batches
+             // We assume batch ID corresponds to the date.
+             // Even if the batch starts at 10:00, searching from 00:00 is safe as there are no items before.
+             const start = `${selectedBatchId}T00:00:00.000`;
+             const end = `${selectedBatchId}T23:59:59.999`;
+             
+             // Note: Strings comparison works for ISO dates.
+             q = query(q, where('scheduledAt', '>=', start), where('scheduledAt', '<=', end));
+        }
+
+        q = query(q, limit(50));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -132,34 +110,97 @@ export default function CampaignReportPage() {
             // Merge with existing dispatches if we have more than 50 (pagination)
             // But for the "Head" (first 50), we keep them realtime.
             setDispatches(prev => {
+                if (selectedBatchId) return items; // If filtering, replace entirely to show accurate filtered view
+                
                 if (prev.length <= 50) return items;
                 // If we have more, replace the first 50 and keep the rest
                 // This might be tricky if sort order changes, but for 'scheduledAt' it's stable-ish.
                 // Simpler: Just update the view for the first 50.
-                return [...items, ...prev.slice(50)];
+                const newItems = [...items];
+                // Append the rest of the previous items that are NOT in the new set
+                const existingIds = new Set(newItems.map(i => i.id));
+                prev.forEach(p => {
+                    if (!existingIds.has(p.id)) {
+                        newItems.push(p);
+                    }
+                });
+                return newItems.sort((a: any, b: any) => (a.scheduledAt || '').localeCompare(b.scheduledAt || ''));
             });
             
-            setLastDispatchDoc(snapshot.docs[snapshot.docs.length - 1]);
+            if (snapshot.docs.length > 0) {
+                 const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+                 const data = lastDoc.data();
+                 // Store the scheduledAt string for pagination
+                 setLastDispatchScheduledAt(data.scheduledAt);
+            }
+            
             setLoadingDispatches(false);
         }, (error) => {
             console.error("Error in dispatches listener:", error);
         });
 
         return () => unsubscribe();
-    }, [uid, id, firestore, campaign?.type]);
+    }, [uid, id, firestore, campaign?.type, selectedBatchId]);
 
-    /* REMOVED: Inefficient Polling
-    useEffect(() => {
-        if (uid && id && campaign?.stats && dispatches.length <= 50) {
-            const timer = setTimeout(() => {
-                loadDispatches(true, true);
-            }, 1000); 
-            return () => clearTimeout(timer);
+    // Load Dispatches (Detailed List) - Manual Pagination
+    const loadDispatches = useCallback(async (isInitial = false, silent = false) => {
+        if (!id || !user) return;
+        if (loadingDispatches && !isInitial) return;
+        
+        if (!silent) setLoadingDispatches(true);
+        
+        try {
+            // If initial, we don't need to load because realtime listener does it
+            // BUT if we are paginating, we use the last doc from state
+            
+            // Ensure we have a string for pagination
+            const startAfterVal = !isInitial && lastDispatchScheduledAt ? lastDispatchScheduledAt : undefined;
+            
+            // Construct Filter
+            let filter = undefined;
+            if (selectedBatchId) {
+                filter = {
+                    start: `${selectedBatchId}T00:00:00`,
+                    end: `${selectedBatchId}T23:59:59`
+                };
+            }
+
+            const result = await getCampaignDispatchesAction(user.uid, id as string, 50, startAfterVal, filter);
+            
+            if (result.success && result.data) {
+                const newItems = result.data;
+                
+                if (newItems.length < 50) {
+                    setHasMoreDispatches(false);
+                }
+                
+                if (newItems.length > 0) {
+                    // Update pagination cursor
+                    const lastItem = newItems[newItems.length - 1];
+                    setLastDispatchScheduledAt(lastItem.scheduledAt);
+                    
+                    setDispatches(prev => {
+                        const newMap = new Map(prev.map(i => [i.id, i]));
+                        newItems.forEach((item: any) => newMap.set(item.id, item));
+                         return Array.from(newMap.values()).sort((a: any, b: any) => 
+                            (a.scheduledAt || '').localeCompare(b.scheduledAt || '')
+                        );
+                    });
+                } else {
+                     setHasMoreDispatches(false);
+                }
+            }
+        } catch (error) {
+            console.error("Error loading dispatches:", error);
+            toast({
+                title: "Erro ao carregar lista",
+                description: "Não foi possível carregar mais itens.",
+                variant: "destructive"
+            });
+        } finally {
+            setLoadingDispatches(false);
         }
-    }, [campaign?.stats?.sent, campaign?.stats?.delivered, campaign?.stats?.failed, uid, id]);
-    */
-
-    // Live Refresh of Interactions (when stats change)
+    }, [id, user, lastDispatchScheduledAt, loadingDispatches, selectedBatchId]);
     useEffect(() => {
         if (!uid || !id) return;
         
@@ -192,8 +233,28 @@ export default function CampaignReportPage() {
     }, [uid, id]);
 
     // Use empty array fallback for derived states
-    const replies = interactions?.filter((i: any) => i.type === 'reply') || [];
-    const blocks = interactions?.filter((i: any) => i.type === 'block') || [];
+    // Filter by selected batch date if active
+    const filteredInteractions = useMemo(() => {
+        if (!interactions) return [];
+        if (!selectedBatchId) return interactions;
+        
+        return interactions.filter((i: any) => {
+             const ts = i.timestamp;
+             if (!ts) return false;
+             let d: Date;
+             // Handle various timestamp formats (string or Firestore Timestamp)
+             if (typeof ts === 'string') d = new Date(ts);
+             else if (typeof ts === 'object' && ts.toDate) d = ts.toDate();
+             else d = new Date(ts); 
+             
+             // selectedBatchId is YYYY-MM-DD
+             const dateKey = d.toISOString().split('T')[0];
+             return dateKey === selectedBatchId;
+        });
+    }, [interactions, selectedBatchId]);
+
+    const replies = filteredInteractions.filter((i: any) => i.type === 'reply');
+    const blocks = filteredInteractions.filter((i: any) => i.type === 'block');
 
     // Calculate stats from messages list if provider stats are zero or missing but messages exist
     // This fixes the issue where provider stats lag behind the message list
@@ -487,7 +548,7 @@ export default function CampaignReportPage() {
     };
 
     return (
-        <div className="container mx-auto py-8 space-y-8">
+        <div className="container mx-auto py-8 px-4 md:px-6 space-y-8">
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
@@ -504,7 +565,7 @@ export default function CampaignReportPage() {
                         </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <Button variant="outline" size="sm" onClick={refreshData} disabled={refreshing}>
                         <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
                         Atualizar
@@ -555,7 +616,7 @@ export default function CampaignReportPage() {
                     <CardDescription>{verdict.description}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="grid grid-cols-3 gap-4 text-center">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
                         <div className="flex flex-col items-center p-2 rounded-lg bg-secondary/10">
                             <div className="text-2xl font-bold">{replyRate.toFixed(1)}%</div>
                             <div className="text-xs text-muted-foreground font-medium">Taxa de Resposta</div>
@@ -610,10 +671,27 @@ export default function CampaignReportPage() {
             </div>
 
             {/* Interactions Tabs */}
-            <Tabs defaultValue={batchesList.length > 0 ? "batches" : "dispatches"} className="w-full">
-                <TabsList className="mb-4">
+            {selectedBatchId && campaign?.batches?.[selectedBatchId] && (
+                <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <Clock className="w-4 h-4" />
+                        <span className="font-semibold">Filtro Ativo: {campaign.batches[selectedBatchId].name}</span>
+                        <span className="text-sm opacity-80">
+                            ({new Date(campaign.batches[selectedBatchId].scheduledAt).toLocaleDateString('pt-BR')})
+                        </span>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => setSelectedBatchId(null)} className="text-blue-800 hover:bg-blue-100 h-8 self-end sm:self-auto">
+                        Limpar Filtro
+                    </Button>
+                </div>
+            )}
+
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <TabsList className="mb-4 w-full flex-wrap h-auto">
                     {batchesList.length > 0 && <TabsTrigger value="batches">Lotes (Dias)</TabsTrigger>}
-                    <TabsTrigger value="dispatches">Lista de Envio (Detalhada)</TabsTrigger>
+                    <TabsTrigger value="dispatches">
+                        Lista de Envio {selectedBatchId ? '(Filtrado)' : '(Detalhada)'}
+                    </TabsTrigger>
                     <TabsTrigger value="replies">
                         Respostas
                         {replies.length > 0 && <Badge variant="secondary" className="ml-2">{replies.length}</Badge>}
@@ -648,68 +726,155 @@ export default function CampaignReportPage() {
                                 </Button>
                             </CardHeader>
                             <CardContent>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Nome</TableHead>
-                                            <TableHead>Agendado Para</TableHead>
-                                            <TableHead>Status</TableHead>
-                                            <TableHead>Progresso</TableHead>
-                                            <TableHead>Métricas</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {batchesList.map((batch: any) => {
-                                            const isBatchDone = (batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) || isCompleted;
-                                            
-                                            // Fallback progress: if campaign is completed, force 100% even if stats are missing
-                                            const progress = isBatchDone ? 100 : (batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0);
-                                            
-                                            return (
-                                            <TableRow key={batch.id}>
-                                                <TableCell>{batch.name}</TableCell>
-                                                <TableCell>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-medium">
-                                                            {new Date(batch.scheduledAt).toLocaleDateString('pt-BR')}
-                                                        </span>
-                                                        <span className="text-xs text-muted-foreground">
-                                                            {new Date(batch.scheduledAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                                            {batch.endTime && ` - ${new Date(batch.endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
-                                                        </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant={isBatchDone ? "default" : "outline"} className={isBatchDone ? "bg-green-500 hover:bg-green-600" : ""}>
-                                                        {isBatchDone ? 'Concluído' : translateStatus(batch.status)}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-2">
-                                                        <Progress value={progress} className="h-2 w-[60px]" />
-                                                        <span className="text-xs text-muted-foreground">
-                                                            {progress}%
-                                                        </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex flex-col text-xs">
-                                                        <span className="font-semibold text-gray-700 dark:text-gray-300">Total: {batch.count}</span>
-                                                        <div className="flex items-center gap-2 mt-1">
-                                                             <span className="text-green-600 font-medium" title="Enviados">
-                                                                 {batch.stats?.sent || (isBatchDone ? Math.max(0, batch.count - (batch.stats?.failed || 0)) : 0)} env
-                                                             </span>
-                                                             <span className="text-gray-300">|</span>
-                                                             <span className="text-red-500 font-medium" title="Falhas">
-                                                                 {batch.stats?.failed || 0} falha
-                                                             </span>
-                                                        </div>
-                                                    </div>
-                                                </TableCell>
+                                {/* Desktop View */}
+                                <div className="hidden md:block overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Nome</TableHead>
+                                                <TableHead>Agendado Para</TableHead>
+                                                <TableHead>Status</TableHead>
+                                                <TableHead>Progresso</TableHead>
+                                                <TableHead>Métricas</TableHead>
                                             </TableRow>
-                                        )})}
-                                    </TableBody>
-                                </Table>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {batchesList.map((batch: any) => {
+                                                const isBatchDone = (batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) || isCompleted;
+                                                
+                                                // Fallback progress: if campaign is completed, force 100% even if stats are missing
+                                                const progress = isBatchDone ? 100 : (batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0);
+                                                
+                                                const isSelected = selectedBatchId === batch.id;
+
+                                                return (
+                                                <TableRow 
+                                                    key={batch.id}
+                                                    className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50 hover:bg-blue-100 border-l-4 border-blue-500" : "hover:bg-muted/50"}`}
+                                                    onClick={() => {
+                                                        if (isSelected) {
+                                                            setSelectedBatchId(null);
+                                                        } else {
+                                                            setSelectedBatchId(batch.id);
+                                                            setActiveTab("dispatches");
+                                                            toast({ title: `Filtrando por ${batch.name}`, description: "Exibindo envios e interações deste lote." });
+                                                        }
+                                                    }}
+                                                >
+                                                    <TableCell className="font-medium whitespace-nowrap">
+                                                        {batch.name}
+                                                        {isSelected && <Badge variant="secondary" className="ml-2 text-[10px]">Ativo</Badge>}
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-medium">
+                                                                {new Date(batch.scheduledAt).toLocaleDateString('pt-BR')}
+                                                            </span>
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {new Date(batch.scheduledAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                {batch.endTime && ` - ${new Date(batch.endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
+                                                            </span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge variant={isBatchDone ? "default" : "outline"} className={isBatchDone ? "bg-green-500 hover:bg-green-600" : ""}>
+                                                            {isBatchDone ? 'Concluído' : 
+                                                                (batch.stats?.sent > 0) ? 'Enviando' :
+                                                                (new Date(batch.scheduledAt) > new Date()) ? 'Agendado' :
+                                                                translateStatus(batch.status)
+                                                            }
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="min-w-[120px]">
+                                                        <div className="flex items-center gap-2">
+                                                            <Progress value={progress} className="h-2 w-[60px]" />
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {progress}%
+                                                            </span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <div className="flex flex-col text-xs">
+                                                            <span className="font-semibold text-gray-700 dark:text-gray-300">Total: {batch.count}</span>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                 <span className="text-green-600 font-medium" title="Enviados">
+                                                                     {batch.stats?.sent || (isBatchDone ? Math.max(0, batch.count - (batch.stats?.failed || 0)) : 0)} env
+                                                                 </span>
+                                                                 <span className="text-gray-300">|</span>
+                                                                 <span className="text-red-500 font-medium" title="Falhas">
+                                                                     {batch.stats?.failed || 0} falha
+                                                                 </span>
+                                                            </div>
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                                )})}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+
+                                {/* Mobile View (Cards) */}
+                                <div className="md:hidden space-y-4">
+                                    {batchesList.map((batch: any) => {
+                                        const isBatchDone = (batch.count > 0 && ((batch.stats?.sent || 0) + (batch.stats?.failed || 0)) >= batch.count) || isCompleted;
+                                        const progress = isBatchDone ? 100 : (batch.count > 0 ? Math.min(100, Math.round(((batch.stats?.sent || 0) / batch.count) * 100)) : 0);
+                                        const isSelected = selectedBatchId === batch.id;
+                                        
+                                        return (
+                                            <div 
+                                                key={batch.id} 
+                                                className={`p-4 border rounded-lg space-y-3 cursor-pointer transition-colors ${isSelected ? "bg-blue-50 border-blue-500" : "bg-card hover:bg-muted/50"}`}
+                                                onClick={() => {
+                                                    if (isSelected) {
+                                                        setSelectedBatchId(null);
+                                                    } else {
+                                                        setSelectedBatchId(batch.id);
+                                                        setActiveTab("dispatches");
+                                                        toast({ title: `Filtrando por ${batch.name}`, description: "Exibindo envios e interações deste lote." });
+                                                    }
+                                                }}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <div className="font-medium flex items-center gap-2">
+                                                        {batch.name}
+                                                        {isSelected && <Badge variant="secondary" className="text-[10px]">Ativo</Badge>}
+                                                    </div>
+                                                    <Badge variant={isBatchDone ? "default" : "outline"} className={isBatchDone ? "bg-green-500" : ""}>
+                                                        {isBatchDone ? 'Concluído' : (batch.stats?.sent > 0) ? 'Enviando' : (new Date(batch.scheduledAt) > new Date()) ? 'Agendado' : translateStatus(batch.status)}
+                                                    </Badge>
+                                                </div>
+                                                
+                                                <div className="text-sm text-muted-foreground">
+                                                    <div className="flex items-center gap-2">
+                                                        <Clock className="w-3 h-3" />
+                                                        {new Date(batch.scheduledAt).toLocaleDateString('pt-BR')} às {new Date(batch.scheduledAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-1">
+                                                    <div className="flex justify-between text-xs text-muted-foreground">
+                                                        <span>Progresso</span>
+                                                        <span>{progress}%</span>
+                                                    </div>
+                                                    <Progress value={progress} className="h-2" />
+                                                </div>
+
+                                                <div className="flex items-center justify-between text-xs pt-2 border-t">
+                                                    <span className="font-semibold">Total: {batch.count}</span>
+                                                    <div className="flex items-center gap-2">
+                                                         <span className="text-green-600 font-medium">
+                                                             {batch.stats?.sent || (isBatchDone ? Math.max(0, batch.count - (batch.stats?.failed || 0)) : 0)} env
+                                                         </span>
+                                                         <span className="text-gray-300">|</span>
+                                                         <span className="text-red-500 font-medium">
+                                                             {batch.stats?.failed || 0} falha
+                                                         </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
                             </CardContent>
                         </Card>
                     </TabsContent>
@@ -722,35 +887,37 @@ export default function CampaignReportPage() {
                             <CardDescription>Status de todos os contatos da campanha (Agendados e Enviados)</CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Nome</TableHead>
-                                        <TableHead>Telefone</TableHead>
-                                        <TableHead>Agendado Para</TableHead>
-                                        <TableHead>Enviado Em</TableHead>
-                                        <TableHead>Status</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {dispatches.length === 0 ? (
+                            {/* Desktop View */}
+                            <div className="hidden md:block overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
                                         <TableRow>
-                                            <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
-                                                {loadingDispatches ? 'Carregando lista de envio...' : 'Nenhum registro encontrado (Campanha antiga ou vazia).'}
-                                            </TableCell>
+                                            <TableHead className="whitespace-nowrap">Nome</TableHead>
+                                            <TableHead className="whitespace-nowrap">Telefone</TableHead>
+                                            <TableHead className="whitespace-nowrap">Agendado Para</TableHead>
+                                            <TableHead className="whitespace-nowrap">Enviado Em</TableHead>
+                                            <TableHead className="whitespace-nowrap">Status</TableHead>
                                         </TableRow>
-                                    ) : (
-                                        dispatches.map((dispatch: any) => (
-                                            <TableRow key={dispatch.id}>
-                                                <TableCell className="font-medium">{dispatch.name || 'Sem nome'}</TableCell>
-                                                <TableCell>{dispatch.phone}</TableCell>
-                                                <TableCell>
-                                                    {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : (campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-')}
+                                    </TableHeader>
+                                    <TableBody>
+                                        {dispatches.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
+                                                    {loadingDispatches ? 'Carregando lista de envio...' : 'Nenhum registro encontrado (Campanha antiga ou vazia).'}
                                                 </TableCell>
-                                                <TableCell>
-                                                    {dispatch.sentAt ? new Date(dispatch.sentAt).toLocaleString('pt-BR') : '-'}
-                                                </TableCell>
-                                                <TableCell>
+                                            </TableRow>
+                                        ) : (
+                                            dispatches.map((dispatch: any) => (
+                                                <TableRow key={dispatch.id}>
+                                                    <TableCell className="font-medium whitespace-nowrap">{dispatch.name || 'Sem nome'}</TableCell>
+                                                    <TableCell className="whitespace-nowrap">{dispatch.phone}</TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : (campaign?.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-')}
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        {dispatch.sentAt ? new Date(dispatch.sentAt).toLocaleString('pt-BR') : '-'}
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">
                                                     <Badge 
                                                         title={dispatch.status === 'failed' ? (dispatch.error || 'Erro desconhecido') : undefined}
                                                         className={
@@ -771,6 +938,60 @@ export default function CampaignReportPage() {
                                     )}
                                 </TableBody>
                             </Table>
+                            </div>
+
+                            {/* Mobile View (Cards) */}
+                            <div className="md:hidden space-y-4">
+                                {dispatches.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/20">
+                                        {loadingDispatches ? 'Carregando...' : 'Nenhum registro encontrado.'}
+                                    </div>
+                                ) : (
+                                    dispatches.map((dispatch: any) => (
+                                        <div key={dispatch.id} className="p-4 border rounded-lg space-y-2 bg-card">
+                                            <div className="flex items-center justify-between">
+                                                <span className="font-medium">{dispatch.name || 'Sem nome'}</span>
+                                                <Badge 
+                                                    className={
+                                                        dispatch.status === 'sent' || dispatch.status === 'delivered' || dispatch.status === 'read' ? 'bg-green-500' : 
+                                                        dispatch.status === 'failed' ? 'bg-red-500' : 
+                                                        'bg-slate-500'
+                                                    }
+                                                >
+                                                    {translateStatus(dispatch.status)}
+                                                </Badge>
+                                            </div>
+                                            
+                                            <div className="text-sm text-muted-foreground flex items-center gap-2">
+                                                <Users className="w-3 h-3" />
+                                                {dispatch.phone}
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t">
+                                                <div>
+                                                    <span className="text-muted-foreground block">Agendado</span>
+                                                    <span>
+                                                        {dispatch.scheduledAt ? new Date(dispatch.scheduledAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                                    </span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-muted-foreground block">Enviado</span>
+                                                    <span>
+                                                        {dispatch.sentAt ? new Date(dispatch.sentAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {dispatch.status === 'failed' && dispatch.error && (
+                                                <div className="text-xs text-red-500 bg-red-50 p-2 rounded mt-2">
+                                                    Erro: {dispatch.error}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
                             {hasMoreDispatches && (
                                 <div className="mt-4 flex justify-center">
                                     <Button variant="outline" onClick={() => loadDispatches(false)} disabled={loadingDispatches}>
@@ -798,37 +1019,65 @@ export default function CampaignReportPage() {
                             <CardDescription>Interações diretas com a campanha</CardDescription>
                         </CardHeader>
                         <CardContent>
-                             <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Contato</TableHead>
-                                        <TableHead>Mensagem</TableHead>
-                                        <TableHead>Data</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {replies.length === 0 ? (
+                            {/* Desktop View */}
+                            <div className="hidden md:block overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
                                         <TableRow>
-                                            <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
-                                                Nenhuma resposta registrada ainda.
-                                            </TableCell>
+                                            <TableHead className="whitespace-nowrap">Contato</TableHead>
+                                            <TableHead className="min-w-[200px]">Mensagem</TableHead>
+                                            <TableHead className="whitespace-nowrap">Data</TableHead>
                                         </TableRow>
-                                    ) : (
-                                        replies.map((reply: any) => (
-                                            <TableRow key={reply.id}>
-                                                <TableCell>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-medium">{reply.name}</span>
-                                                        <span className="text-xs text-muted-foreground">{reply.phone}</span>
-                                                    </div>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {replies.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                                                    Nenhuma resposta registrada ainda.
                                                 </TableCell>
-                                                <TableCell>{reply.message || reply.content}</TableCell>
-                                                <TableCell>{new Date(reply.timestamp || reply.createdAt).toLocaleString()}</TableCell>
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
+                                        ) : (
+                                            replies.map((reply: any) => (
+                                                <TableRow key={reply.id}>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-medium">{reply.name}</span>
+                                                            <span className="text-xs text-muted-foreground">{reply.phone}</span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="min-w-[200px]">{reply.message || reply.content}</TableCell>
+                                                    <TableCell className="whitespace-nowrap">{new Date(reply.timestamp || reply.createdAt).toLocaleString()}</TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            {/* Mobile View (Cards) */}
+                            <div className="md:hidden space-y-4">
+                                {replies.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/20">
+                                        Nenhuma resposta registrada ainda.
+                                    </div>
+                                ) : (
+                                    replies.map((reply: any) => (
+                                        <div key={reply.id} className="p-4 border rounded-lg space-y-3 bg-card">
+                                            <div className="flex items-center justify-between">
+                                                 <div className="font-medium">{reply.name}</div>
+                                                 <span className="text-xs text-muted-foreground">{new Date(reply.timestamp || reply.createdAt).toLocaleDateString('pt-BR')}</span>
+                                            </div>
+                                            <div className="text-sm text-muted-foreground flex items-center gap-2">
+                                                 <Users className="w-3 h-3" />
+                                                 {reply.phone}
+                                            </div>
+                                            <div className="bg-muted p-3 rounded-md text-sm italic">
+                                                &quot;{reply.message || reply.content}&quot;
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>
@@ -840,39 +1089,67 @@ export default function CampaignReportPage() {
                             <CardDescription>Contatos que pediram para não receber mais mensagens</CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Contato</TableHead>
-                                        <TableHead>Data do Bloqueio</TableHead>
-                                        <TableHead>Status</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {blocks.length === 0 ? (
+                            {/* Desktop View */}
+                            <div className="hidden md:block overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
                                         <TableRow>
-                                            <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
-                                                Nenhum bloqueio registrado.
-                                            </TableCell>
+                                            <TableHead className="whitespace-nowrap">Contato</TableHead>
+                                            <TableHead className="whitespace-nowrap">Data do Bloqueio</TableHead>
+                                            <TableHead className="whitespace-nowrap">Status</TableHead>
                                         </TableRow>
-                                    ) : (
-                                        blocks.map((block: any) => (
-                                            <TableRow key={block.id}>
-                                                <TableCell>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-medium">{block.name}</span>
-                                                        <span className="text-xs text-muted-foreground">{block.phone}</span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>{new Date(block.timestamp || block.createdAt).toLocaleString()}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant="destructive">Bloqueado</Badge>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {blocks.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                                                    Nenhum bloqueio registrado.
                                                 </TableCell>
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
+                                        ) : (
+                                            blocks.map((block: any) => (
+                                                <TableRow key={block.id}>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-medium">{block.name}</span>
+                                                            <span className="text-xs text-muted-foreground">{block.phone}</span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">{new Date(block.timestamp || block.createdAt).toLocaleString()}</TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <Badge variant="destructive">Bloqueado</Badge>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            {/* Mobile View (Cards) */}
+                            <div className="md:hidden space-y-4">
+                                {blocks.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/20">
+                                        Nenhum bloqueio registrado.
+                                    </div>
+                                ) : (
+                                    blocks.map((block: any) => (
+                                        <div key={block.id} className="p-4 border rounded-lg space-y-3 bg-card border-red-100 dark:border-red-900/30">
+                                            <div className="flex items-center justify-between">
+                                                 <div className="font-medium">{block.name}</div>
+                                                 <Badge variant="destructive">Bloqueado</Badge>
+                                            </div>
+                                            <div className="text-sm text-muted-foreground flex items-center gap-2">
+                                                 <Users className="w-3 h-3" />
+                                                 {block.phone}
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                Data: {new Date(block.timestamp || block.createdAt).toLocaleString()}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>

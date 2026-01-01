@@ -459,7 +459,13 @@ export async function getCampaignInteractionsAction(userId: string, campaignId: 
   }
 }
 
-export async function getCampaignDispatchesAction(userId: string, campaignId: string, pageSize = 50, startAfterPhone?: string) {
+export async function getCampaignDispatchesAction(
+    userId: string, 
+    campaignId: string, 
+    pageSize = 50, 
+    startAfterPhone?: string,
+    filter?: { start?: string; end?: string }
+) {
   try {
     const campaignRef = db.collection('users').doc(userId).collection('campaigns').doc(campaignId);
     const campaignDoc = await campaignRef.get();
@@ -474,8 +480,17 @@ export async function getCampaignDispatchesAction(userId: string, campaignId: st
 
     let ref = campaignRef
       .collection(collectionName)
-      .orderBy('scheduledAt') // Use scheduledAt instead of phone
-      .limit(pageSize);
+      .orderBy('scheduledAt'); // Use scheduledAt instead of phone
+
+    // Apply Date Filters if provided
+    if (filter?.start) {
+        ref = ref.where('scheduledAt', '>=', filter.start);
+    }
+    if (filter?.end) {
+        ref = ref.where('scheduledAt', '<=', filter.end);
+    }
+
+    ref = ref.limit(pageSize);
 
     // If startAfterPhone is provided (legacy name), we assume it's actually the scheduledAt string from the last item
     if (startAfterPhone) {

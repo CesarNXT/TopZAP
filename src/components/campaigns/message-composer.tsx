@@ -325,7 +325,7 @@ function ButtonManager({ form }: { form: UseFormReturn<any> }) {
                 ))}
             </div>
              <p className="text-xs text-muted-foreground">
-                Adicione até 4 botões personalizados. O botão "Bloquear Contato" será sempre enviado.
+                Adicione até 4 botões personalizados. O botão &quot;Bloquear Contato&quot; será sempre enviado.
             </p>
         </div>
     );

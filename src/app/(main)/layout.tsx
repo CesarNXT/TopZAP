@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
-import { SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarInset } from '@/components/ui/sidebar';
+import { SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
+import { Separator } from '@/components/ui/separator';
 import { MainNav } from '@/components/main-nav';
 import { UserMenu } from '@/components/user-menu';
 import { Logo } from '@/components/logo';
@@ -28,7 +29,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider open={true}>
         <Sidebar collapsible="icon">
           <SidebarHeader>
             <Logo />
@@ -41,6 +42,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </SidebarFooter>
         </Sidebar>
         <SidebarInset className="flex flex-col min-h-screen">
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
+            <SidebarTrigger className="-ml-1 md:hidden" />
+            <Separator orientation="vertical" className="mr-2 h-4 md:hidden" />
+          </header>
           <div className='flex-1 p-4 md:p-6'>
             {children}
           </div>

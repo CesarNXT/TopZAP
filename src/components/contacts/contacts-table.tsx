@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ColumnDef,
   flexRender,
@@ -120,7 +121,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
         try {
             const result = await standardizeContactStatuses(user.uid);
             if (result.success) {
-                if (result.count > 0) {
+                if ((result.count ?? 0) > 0) {
                      toast({ title: 'Sucesso', description: `${result.count} contatos padronizados.` });
                      loadContacts();
                 } else {
@@ -645,7 +646,7 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
             </div>
         </div>
       <div 
-        className="rounded-md border overflow-y-auto relative" 
+        className="hidden md:block rounded-md border overflow-y-auto relative" 
         style={{ height: 'calc(100vh - 400px)' }}
       >
         <Table>
@@ -717,6 +718,69 @@ export function ContactsTable({ onEditRequest, onDelete, importCounter, filter, 
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Mobile Card View */}
+      <div className="md:hidden space-y-4">
+        {isLoading ? (
+            <div className="flex justify-center items-center h-48">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+        ) : table.getRowModel().rows?.length ? (
+            table.getRowModel().rows.map((row) => (
+                <Card key={row.id} className="bg-white shadow-sm" onClick={() => onEditRequest(row.original)}>
+                    <CardHeader className="pb-2 pt-4 px-4">
+                         <div className="flex justify-between items-start">
+                            <div className="flex items-center gap-4">
+                                <Avatar className="h-12 w-12">
+                                    <AvatarFallback className="text-lg">{row.original.name.charAt(0).toUpperCase()}</AvatarFallback>
+                                </Avatar>
+                                <div>
+                                    <CardTitle className="text-lg font-semibold">{row.original.name}</CardTitle>
+                                    <p className="text-base text-muted-foreground">{formatPhoneNumber(row.original.phone)}</p>
+                                </div>
+                            </div>
+                            <div onClick={(e) => e.stopPropagation()}>
+                                <ActionsCell row={row} onEdit={onEditRequest} onDelete={handleDeleteRequest} />
+                            </div>
+                         </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pb-4 px-4">
+                        <div className="flex items-center justify-between border-t pt-3">
+                            <span className="text-sm font-medium text-muted-foreground">Status</span>
+                            {flexRender(columns[4].cell, { row } as any)}
+                        </div>
+                        
+                         <div className="space-y-2 border-t pt-3">
+                            <span className="text-sm font-medium text-muted-foreground block">Etiquetas</span>
+                            <div className="flex flex-wrap gap-2">
+                                {flexRender(columns[7].cell, { row } as any)}
+                            </div>
+                        </div>
+
+                         <div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
+                            <span>Adicionado em</span>
+                            {flexRender(columns[6].cell, { row } as any)}
+                        </div>
+                    </CardContent>
+                </Card>
+            ))
+        ) : (
+            <div className="text-center py-12 bg-white rounded-lg border border-dashed text-muted-foreground">
+                <div className="flex flex-col items-center justify-center gap-2">
+                    <span>Nenhum contato encontrado.</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => loadContacts()}
+                      className="mt-2"
+                    >
+                      <RefreshCw className="h-3 w-3 mr-2" />
+                      Tentar Recarregar
+                    </Button>
+                  </div>
+            </div>
+        )}
       </div>
 
       <div className="flex items-center justify-end space-x-2 py-4">

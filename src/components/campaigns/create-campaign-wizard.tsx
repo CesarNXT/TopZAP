@@ -371,7 +371,7 @@ export function CreateCampaignWizard() {
                 });
         };
 
-        const choices = mapButtonsToChoices(values.buttons);
+        const choices = mapButtonsToChoices(values.buttons || []);
 
         // Prepare messages for uazapi
         const messagesToSend: any[] = [];

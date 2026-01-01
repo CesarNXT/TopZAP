@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import {
     ColumnDef,
     flexRender,
@@ -466,7 +467,7 @@ export function CampaignsTable() {
             />
         </div>
 
-        <div className="rounded-md border bg-white shadow-sm">
+        <div className="hidden md:block rounded-md border bg-white shadow-sm">
           <Table>
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -515,6 +516,49 @@ export function CampaignsTable() {
               )}
             </TableBody>
           </Table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-4">
+            {table.getRowModel().rows?.length ? (
+                table.getRowModel().rows.map((row) => (
+                    <Card key={row.id} className="bg-white shadow-sm">
+                        <CardHeader className="pb-2 pt-4 px-4">
+                            <div className="flex justify-between items-start gap-2">
+                                <div className="flex-1">
+                                    {/* Reuse the name cell renderer logic partially or just call flexRender for specific cells if columns are stable */}
+                                    {flexRender(columns[0].cell, { row } as any)}
+                                </div>
+                                <div className="-mt-1 -mr-2">
+                                    <CampaignActionsCell campaign={row.original} />
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4 pb-4 px-4">
+                            <div className="flex items-center justify-between border-t pt-3">
+                                <span className="text-sm font-medium text-muted-foreground">Status</span>
+                                {flexRender(columns[1].cell, { row } as any)}
+                            </div>
+                            
+                            <div className="space-y-1 border-t pt-3">
+                                <span className="text-sm font-medium text-muted-foreground block mb-2">Progresso</span>
+                                <CampaignProgressCell campaign={row.original} />
+                            </div>
+
+                            <div className="flex justify-between items-start border-t pt-3">
+                                <span className="text-sm font-medium text-muted-foreground mt-1">Cronograma</span>
+                                <div className="text-right text-sm">
+                                    {flexRender(columns[3].cell, { row } as any)}
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                ))
+            ) : (
+                <div className="text-center py-12 bg-white rounded-lg border border-dashed text-muted-foreground">
+                    Nenhuma campanha encontrada.
+                </div>
+            )}
         </div>
         
         {/* Pagination - Keeping it simple/hidden if not needed but useful for large lists */}

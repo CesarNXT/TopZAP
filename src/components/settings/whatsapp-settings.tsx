@@ -90,7 +90,7 @@ export function WhatsAppSettings() {
                 return;
             }
 
-            const instanceData = result.data;
+            const instanceData = result.data as any;
             const instanceName = instanceData.name || instanceData.instanceName || 'Unknown';
 
             // 2. Configure Webhook automatically
