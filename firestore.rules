@@ -212,6 +212,30 @@ service cloud.firestore {
           allow update: if isExistingOwner(userId);
           allow delete: if isExistingOwner(userId);
         }
+
+        /**
+         * @description Manages queue items for managed campaigns.
+         * @path /users/{userId}/campaigns/{campaignId}/queue/{queueId}
+         */
+        match /queue/{queueId} {
+          allow get: if isOwner(userId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId);
+          allow update: if isExistingOwner(userId);
+          allow delete: if isExistingOwner(userId);
+        }
+
+        /**
+         * @description Manages dispatches for legacy campaigns.
+         * @path /users/{userId}/campaigns/{campaignId}/dispatches/{dispatchId}
+         */
+        match /dispatches/{dispatchId} {
+          allow get: if isOwner(userId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId);
+          allow update: if isExistingOwner(userId);
+          allow delete: if isExistingOwner(userId);
+        }
       }
     }
   }

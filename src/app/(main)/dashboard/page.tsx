@@ -16,7 +16,8 @@ import {
   TriangleAlert,
   XCircle,
   PlusCircle,
-  CalendarDays
+  CalendarDays,
+  BadgeDollarSign
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -25,17 +26,20 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  AreaChart,
+  Area
 } from 'recharts';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import type { Campaign } from '@/lib/types';
-import { subDays, format, isToday, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { subDays, format, isToday, startOfMonth, endOfMonth, isWithinInterval, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useUser, useCollection, useFirestore } from '@/firebase';
 import { useMemoFirebase } from '@/firebase/provider';
 import { collection, query, orderBy, limit, where } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
+import { useMemo } from 'react';
 
 
 const Greeting = () => {
@@ -69,66 +73,139 @@ export default function DashboardPage() {
 
     const campaignsQuery = useMemoFirebase(() => {
         if (!user) return null;
-        // Optimization: Limit to last 30 days to save reads
-        // We don't need to load years of campaign history for the dashboard
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const isoDate = thirtyDaysAgo.toISOString();
-
+        
+        // Fetching all campaigns to calculate lifetime stats
+        // Limit set to 1000 to prevent performance issues with massive accounts
         return query(
             collection(firestore, 'users', user.uid, 'campaigns'), 
-            where('createdAt', '>=', isoDate),
             orderBy('createdAt', 'desc'),
-            limit(100) // Safety cap
+            limit(1000)
         );
     }, [firestore, user]);
 
     const { data: allCampaigns } = useCollection<Campaign>(campaignsQuery);
 
-    const campaignsData = allCampaigns || [];
-
-    const currentMonthPrefix = format(new Date(), 'yyyy-MM');
-
-    const monthlyStats = {
-        sent: campaignsData
-            .filter(c => c.sentDate && c.sentDate.startsWith(currentMonthPrefix))
-            .reduce((acc, curr) => {
-                // Sum sent messages (fallback to recipients count if stats.sent missing)
-                const sent = curr.stats?.sent ?? curr.recipients ?? 0;
-                return acc + sent;
-            }, 0)
-    };
-
-    const engagementStats = (() => {
-        const validCampaigns = campaignsData.filter(c => 
-            ['Sent', 'Completed', 'Done', 'Concluído'].includes(c.status || '')
-        );
+    const stats = useMemo(() => {
+        let sentToday = 0;
+        let sentMonth = 0;
+        let pending = 0;
+        let totalSentAllTime = 0;
+        let totalFailedAllTime = 0;
+        let totalReplies = 0;
         
-        if (validCampaigns.length === 0) return 0;
+        const dailyData: Record<string, { success: number, fails: number, savings: number }> = {};
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const currentMonthStr = format(new Date(), 'yyyy-MM');
 
-        let totalRecipients = 0;
-        let totalEngaged = 0;
+        // Initialize dailyData for last 7 days
+        for(let i=0; i<7; i++) {
+             const d = format(subDays(new Date(), i), 'yyyy-MM-dd');
+             dailyData[d] = { success: 0, fails: 0, savings: 0 };
+        }
 
-        validCampaigns.forEach(c => {
-            const rec = c.recipients || 0;
-            if (rec > 0) {
-                totalRecipients += rec;
-                // Engagement: Max of replies (engagement) or read count
-                // User defined: "minimo de resposta"
-                const engaged = Math.max(c.engagement || 0, c.stats?.read || 0);
-                totalEngaged += engaged;
+        const campaigns = allCampaigns || [];
+        const totalCampaigns = campaigns.length;
+
+        campaigns.forEach(campaign => {
+            // 1. Process Batches (Preferred for granularity)
+            if (campaign.batches) {
+                Object.values(campaign.batches).forEach((batch: any) => {
+                    let batchDate: Date | null = null;
+                    if (batch.scheduledAt) batchDate = new Date(batch.scheduledAt);
+                    else if (campaign.sentDate) batchDate = new Date(campaign.sentDate);
+                    
+                    if (!batchDate) return;
+
+                    const dateKey = format(batchDate, 'yyyy-MM-dd');
+                    const monthKey = format(batchDate, 'yyyy-MM');
+                    
+                    const sent = batch.stats?.sent || 0;
+                    const failed = batch.stats?.failed || 0;
+                    const count = batch.count || 0;
+                    
+                    // Pending logic
+                    const batchPending = Math.max(0, count - sent - failed);
+                    if (['Scheduled', 'Running', 'Paused', 'Sending'].includes(campaign.status) && batch.status !== 'completed') {
+                         pending += batchPending;
+                    }
+
+                    if (dateKey === todayStr) sentToday += sent;
+                    if (monthKey === currentMonthStr) sentMonth += sent;
+                    
+                    totalSentAllTime += sent;
+                    totalFailedAllTime += failed;
+
+                    // Chart Data
+                    if (dailyData[dateKey]) {
+                        dailyData[dateKey].success += sent;
+                        dailyData[dateKey].fails += failed;
+                        dailyData[dateKey].savings += (sent * 0.33);
+                    }
+                });
+            } else {
+                // Fallback for legacy campaigns without batches
+                const dateStr = campaign.sentDate || campaign.createdAt;
+                if (dateStr) {
+                    const date = new Date(dateStr);
+                    const sent = campaign.stats?.sent || campaign.recipients || 0;
+                    const failed = campaign.stats?.failed || 0;
+                    
+                    const dateKey = format(date, 'yyyy-MM-dd');
+                    const monthKey = format(date, 'yyyy-MM');
+
+                    if (dateKey === todayStr) sentToday += sent;
+                    if (monthKey === currentMonthStr) sentMonth += sent;
+                    
+                    totalSentAllTime += sent;
+                    totalFailedAllTime += failed;
+                    
+                    if (['Scheduled', 'Draft', 'Paused'].includes(campaign.status)) {
+                        pending += campaign.recipients || 0;
+                    }
+
+                    if (dailyData[dateKey]) {
+                        dailyData[dateKey].success += sent;
+                        dailyData[dateKey].fails += failed;
+                        dailyData[dateKey].savings += (sent * 0.33);
+                    }
+                }
             }
+            
+            // Engagement
+             const replies = campaign.stats?.replied || 0; 
+             totalReplies += replies;
         });
+        
+        // Savings
+        const savings = totalSentAllTime * 0.33;
+        const engagementRate = totalSentAllTime > 0 ? (totalReplies / totalSentAllTime) * 100 : 0;
+        const successRate = (totalSentAllTime + totalFailedAllTime) > 0 
+            ? (totalSentAllTime / (totalSentAllTime + totalFailedAllTime)) * 100 
+            : 0;
 
-        return totalRecipients > 0 ? (totalEngaged / totalRecipients) * 100 : 0;
-    })();
+        // Weekly Chart Array
+        const weeklyChart = Object.entries(dailyData)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, val]) => ({
+                day: format(new Date(date), 'dd/MM'), // Use date directly since it's yyyy-MM-dd
+                success: val.success,
+                fails: val.fails,
+                savings: Number(val.savings.toFixed(2))
+            }));
 
-    const dailyStats = {
-        sentToday: campaignsData.filter(c => c.status === 'Sent' && c.sentDate && isToday(new Date(c.sentDate))).length,
-        inQueue: campaignsData.filter(c => c.status === 'Scheduled').length,
-        engagementRate: engagementStats,
-        monthlySent: monthlyStats.sent
-    };
+        return { 
+            sentToday, 
+            sentMonth, 
+            pending, 
+            savings, 
+            weeklyChart, 
+            totalSentAllTime, 
+            totalFailedAllTime,
+            totalCampaigns,
+            engagementRate,
+            successRate
+        };
+    }, [allCampaigns]);
 
     const getEngagementLabel = (rate: number) => {
         if (rate >= 30) return { label: "Excelente", color: "text-green-600" };
@@ -137,27 +214,7 @@ export default function DashboardPage() {
         return { label: "Abaixo da Média", color: "text-red-600" };
     };
 
-    const engagementLabel = getEngagementLabel(dailyStats.engagementRate);
-
-    const weeklyPerformance = Array.from({ length: 7 }).map((_, i) => {
-        const date = subDays(new Date(), i);
-        const sentOnDay = campaignsData.filter(c => c.sentDate && c.sentDate.startsWith(format(date, 'yyyy-MM-dd')));
-        return {
-            day: format(date, 'EEE', { locale: ptBR }),
-            success: sentOnDay.filter(c => c.status === 'Sent').length,
-            fails: sentOnDay.filter(c => c.status === 'Failed').length,
-        };
-    }).reverse();
-
-    const lastSentMessages = campaignsData
-        .filter(c => c.status === 'Sent' || c.status === 'Failed' || c.status === 'Scheduled')
-        .slice(0, 5)
-        .map(c => ({
-            id: c.id,
-            to: `Campanha para ${c.recipients} contatos`,
-            status: c.status === 'Scheduled' ? 'Waiting' : c.status,
-            campaign: c.name,
-        }));
+    const engagementLabel = getEngagementLabel(stats.engagementRate);
 
   return (
     <div className="container relative">
@@ -166,10 +223,11 @@ export default function DashboardPage() {
       </PageHeader>
       
       <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {/* Row 1: Daily & Realtime Activity */}
         <StatCard
             id="tour-stats-card"
             title="Envios Hoje"
-            value={dailyStats.sentToday}
+            value={stats.sentToday}
             description="Mensagens nas últimas 24h"
             icon={<MessageSquareText />}
             gradient="from-blue-400 to-green-300"
@@ -177,7 +235,7 @@ export default function DashboardPage() {
 
         <StatCard
             title="Fila de Espera"
-            value={dailyStats.inQueue}
+            value={stats.pending}
             description="Aguardando envio"
             icon={<Clock />}
             gradient="from-yellow-400 to-orange-400"
@@ -187,7 +245,7 @@ export default function DashboardPage() {
             title="Taxa de Engajamento"
             value={
                 <div className="flex flex-col items-start">
-                    <span>{dailyStats.engagementRate.toFixed(1)}%</span>
+                    <span>{stats.engagementRate.toFixed(1)}%</span>
                     <span className={`text-xs font-medium ${engagementLabel.color} mt-1`}>
                         {engagementLabel.label}
                     </span>
@@ -200,15 +258,47 @@ export default function DashboardPage() {
 
         <StatCard
             title="Envios no Mês"
-            value={dailyStats.monthlySent}
+            value={stats.sentMonth}
             description="Total de envios este mês"
             icon={<CalendarDays />}
             gradient="from-pink-400 to-rose-400"
         />
+
+        {/* Row 2: Lifetime Stats & Value */}
+        <StatCard
+            title="Total de Envios"
+            value={stats.totalSentAllTime}
+            description="Desde o início"
+            icon={<MessageSquareText />}
+            gradient="from-cyan-400 to-blue-400"
+        />
+
+        <StatCard
+            title="Total de Campanhas"
+            value={stats.totalCampaigns}
+            description="Campanhas criadas"
+            icon={<CalendarDays />}
+            gradient="from-indigo-400 to-violet-400"
+        />
+
+        <StatCard
+            title="Taxa de Sucesso"
+            value={`${stats.successRate.toFixed(1)}%`}
+            description="Mensagens entregues vs falhas"
+            icon={<TrendingUp />}
+            gradient={stats.successRate >= 90 ? "from-emerald-400 to-green-400" : "from-orange-400 to-red-400"}
+        />
+
+        <StatCard
+            title="Economia Total"
+            value={`R$ ${stats.savings.toFixed(2).replace('.', ',')}`}
+            description="Economia vs API Oficial (R$ 0,33/msg)"
+            icon={<BadgeDollarSign />}
+            gradient="from-emerald-400 to-teal-400"
+        />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6">
-        <div className="space-y-6">
+      <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
             <Card className="shadow-sm">
                 <CardHeader>
                     <CardTitle>Desempenho da Semana</CardTitle>
@@ -216,7 +306,7 @@ export default function DashboardPage() {
                 </CardHeader>
                 <CardContent>
                     <ResponsiveContainer width="100%" height={250}>
-                        <BarChart data={weeklyPerformance}>
+                        <BarChart data={stats.weeklyChart}>
                             <XAxis dataKey="day" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--background))', borderColor: 'hsl(var(--border))' }}/>
@@ -226,7 +316,32 @@ export default function DashboardPage() {
                     </ResponsiveContainer>
                 </CardContent>
             </Card>
-        </div>
+
+            <Card className="shadow-sm">
+                <CardHeader>
+                    <CardTitle>Economia Diária</CardTitle>
+                    <CardDescription>Valor economizado por dia (vs API Oficial)</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <ResponsiveContainer width="100%" height={250}>
+                        <AreaChart data={stats.weeklyChart}>
+                            <defs>
+                                <linearGradient id="colorSavings" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
+                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <XAxis dataKey="day" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} unit="R$" />
+                            <Tooltip 
+                                contentStyle={{ backgroundColor: 'hsl(var(--background))', borderColor: 'hsl(var(--border))' }}
+                                formatter={(value: number) => [`R$ ${value.toFixed(2)}`, 'Economia']}
+                            />
+                            <Area type="monotone" dataKey="savings" stroke="#10b981" fillOpacity={1} fill="url(#colorSavings)" />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </CardContent>
+            </Card>
       </div>
     </div>
   );
