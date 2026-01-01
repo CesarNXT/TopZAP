@@ -174,6 +174,7 @@ export async function createManagedCampaign(input: CreateManagedCampaignInput) {
         pending: recipients.length,
       },
       nextRunAt: effectiveStartDate.getTime(), // Timestamp for next execution
+      autoTagId: autoTagId || null,
     };
 
     // Create a ref with auto-id, then set().

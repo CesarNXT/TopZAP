@@ -331,6 +331,19 @@ export async function GET(request: Request) {
                     } : {};
 
                     if (success) {
+                        // AUTO-TAG LOGIC: Assign tag upon successful send
+                        if (campaignData.autoTagId && queueData.contactId) {
+                            try {
+                                const contactRef = db.collection('users').doc(userId).collection('contacts').doc(queueData.contactId);
+                                await contactRef.update({
+                                    tags: FieldValue.arrayUnion(campaignData.autoTagId)
+                                });
+                            } catch (tagError) {
+                                console.error(`[Cron] Error auto-tagging contact ${queueData.contactId}:`, tagError);
+                                // Non-critical, continue
+                            }
+                        }
+
                         await queueDoc.ref.update({
                             status: 'sent', 
                             sentAt: new Date().toISOString(),
@@ -345,6 +358,30 @@ export async function GET(request: Request) {
                             ...batchUpdate
                         });
                     } else {
+                        // Check for Invalid Number errors to tag accordingly
+                        const errorLower = errorDetails.toLowerCase();
+                        const isInvalidNumber = errorLower.includes('invalid') || 
+                                              errorLower.includes('not registered') ||
+                                              errorLower.includes('não existe') ||
+                                              errorLower.includes('não é whatsapp') ||
+                                              errorLower.includes('not on whatsapp') ||
+                                              errorLower.includes('inválido') ||
+                                              errorLower.includes('number is not a valid whatsapp');
+
+                        if (isInvalidNumber && queueData.contactId) {
+                             try {
+                                 const invalidTagId = await getInvalidNumberTagId(userId);
+                                 const contactRef = db.collection('users').doc(userId).collection('contacts').doc(queueData.contactId);
+                                 await contactRef.update({
+                                     tags: FieldValue.arrayUnion(invalidTagId),
+                                     segment: 'Inactive' // Also mark as Inactive since it's invalid
+                                 });
+                                 console.log(`[Cron] Tagged ${contactPhone} as Invalid Number`);
+                             } catch (tagErr) {
+                                 console.error(`[Cron] Error tagging invalid number for ${queueData.contactId}:`, tagErr);
+                             }
+                        }
+
                         const batchFailUpdate = (batchKey && campaignData.batches && campaignData.batches[batchKey]) ? {
                             [`batches.${batchKey}.stats.failed`]: FieldValue.increment(1)
                         } : {};

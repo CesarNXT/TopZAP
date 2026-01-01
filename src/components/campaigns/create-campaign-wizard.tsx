@@ -601,7 +601,8 @@ export function CreateCampaignWizard() {
                 start: values.startHour || "08:00",
                 end: values.endHour || "18:00"
             },
-            scheduleRules: scheduleRules
+            scheduleRules: scheduleRules,
+            autoTagId: tagId || undefined
         });
 
         console.log("Managed Campaign Creation Result:", result);
